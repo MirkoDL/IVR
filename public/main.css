@@ -1,0 +1,9 @@
+.custom-btn-close {
+    background-color: red; /* Trasparente per il fondo */
+    opacity: 0.8;
+}
+
+.custom-btn-close:hover {
+    background-color: red; /* Colore di sfondo al passaggio del mouse */
+    opacity: 1
+}
