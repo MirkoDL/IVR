@@ -14,6 +14,7 @@ This project provides a simple tool for creating Interactive Voice Response (IVR
 - 💅 Express.js
 - 🧾️ Amazon Polly API
 - 🎶 FFMPEG 
+- 🌻 Bootstrap
 - 🪄 HTML/CSS
 
 ## 🔬 Roadmap
