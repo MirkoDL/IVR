@@ -1,0 +1,23 @@
+{
+  "name": "ivr",
+  "version": "0.0.1",
+  "description": "IVR message automation",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "IVR"
+  ],
+  "author": "Mirko Di Leonardo",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "@aws-sdk/client-polly": "^3.665.0",
+    "aws-sdk": "^2.1691.0",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3",
+    "node-id3": "^0.2.6"
+  }
+}
