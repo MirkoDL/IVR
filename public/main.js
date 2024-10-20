@@ -1,4 +1,3 @@
-//song selector from server
 //populate dropDown
 window.onload = function () {
     fetch('/api/canzoni') 
@@ -9,12 +8,14 @@ window.onload = function () {
             return response.json(); // Supponiamo che il server restituisca un JSON
         })
         .then(data => {
-            // Mostra la lista delle canzoni all'utente
-            //console.log(data);
             dropdownMenu.innerHTML = "";
-            data.forEach(function (value, index) {
+            data.forEach(function (value) {
+                // Rimuovi l'estensione .mp3
+                let songName = value.replace('.mp3', '');
+                // Limita il testo a 10 caratteri
+                let displayText = songName.length > 30 ? songName.substring(0, 30).trim() + '...' : songName;
                 let li = document.createElement('li');
-                li.innerHTML = `<a class="dropdown-item" href="#">${value}</a>`;
+                li.innerHTML = `<a class="dropdown-item" href="#" value="${value}">${displayText}</a>`;
                 dropdownMenu.appendChild(li); // Aggiungi l'elemento <li> al menu a discesa
             });
         })
@@ -22,6 +23,7 @@ window.onload = function () {
             console.error('C\'è stato un problema con la richiesta:', error);
         });
 };
+
 
 // Initialize a counter for dynamically added input fields
 let inputCounter = 1;
@@ -175,16 +177,18 @@ document.getElementById("music").addEventListener('click', function (event) {
     const dropdownItems = document.querySelectorAll('#dropdownMenu .dropdown-item');
     dropdownItems.forEach(item => {
         item.addEventListener('click', function (event) {
-            const selectedValue = event.target.textContent;
+            // Ottieni il valore completo dall'attributo 'value'
+            const selectedValue = event.target.getAttribute('value');
+
+            // Imposta il valore del bottone con il valore completo
             document.getElementById("music").value = selectedValue;
-            let songDisplayName = selectedValue.replace(".mp3", "");
-            if (songDisplayName.length > 10) {
-                songDisplayName = songDisplayName.substring(0, 10) + '...';
-            }
-            document.getElementById("music").textContent = songDisplayName;
+            
+            // Aggiorna il testo del bottone
+            document.getElementById("music").textContent = event.target.textContent;;
         });
     });
 });
+
 
 
 // Listen for the 'click' event on the 'sendQuery' button

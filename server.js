@@ -9,6 +9,8 @@ const ID3 = require('node-id3'); //audio metadata
 const cron = require('node-cron');
 const { exec } = require('child_process');
 
+const { getMp3Files } = require('./songs/songArray.js'); // Importa la funzione dal file songArray.js
+
 require('dotenv').config({ path: __dirname + '/env/hidden.env' });
 
 const app = express();
@@ -32,11 +34,18 @@ app.post('/submit', (req, res) => {
     res.json({ message: 'Testo ricevuto con successo!' }); // Risposta al client
 });
 
-let songArray = require('./songs/songArray.js');
-songArray = songArray.array;
-// Endpoint per restituire la lista delle canzoni
-app.get('/api/canzoni', (req, res) => {
-    res.json(songArray); // Restituisce l'array di canzoni come JSON
+// Percorso della directory da cui leggere i file
+const directoryPath = path.join(__dirname, '/songs'); // Cambia 'filesList' con il percorso della tua directory
+
+app.get('/api/canzoni', async (req, res) => {
+    try {
+        const mp3Files = await getMp3Files(directoryPath); // Aspetta che l'array di file MP3 sia popolato
+        res.setHeader('Content-Type', 'application/json');
+        res.json(mp3Files); // Restituisce l'array di file MP3 come JSON
+    } catch (error) {
+        console.error('Errore nel recupero delle canzoni:', error);
+        res.status(500).json({ error: 'Errore nel recupero delle canzoni' });
+    }
 });
 
 
@@ -260,5 +269,5 @@ cron.schedule('0 0 * * *', () => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Server in esecuzione su http://localhost:${PORT}`);
+    console.log(`Server in esecuzione su http://localhost:${process.env.PORT}`);
 });

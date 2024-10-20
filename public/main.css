@@ -1,9 +1,17 @@
 .custom-btn-close {
-    background-color: red; /* Trasparente per il fondo */
-    opacity: 0.8;
+  background-color: red; /* Trasparente per il fondo */
+  opacity: 0.8;
 }
 
 .custom-btn-close:hover {
-    background-color: red; /* Colore di sfondo al passaggio del mouse */
-    opacity: 1
+  background-color: red; /* Colore di sfondo al passaggio del mouse */
+  opacity: 1;
+}
+
+#music {
+    width: 300px !important;
+}
+
+.dropdown-menu {
+    transform: translate(22px, 45px) !important;
 }
