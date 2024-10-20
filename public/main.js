@@ -1,6 +1,6 @@
 //populate dropDown
 window.onload = function () {
-    fetch('/api/canzoni') 
+    fetch('/api/canzoni')
         .then(response => {
             if (!response.ok) {
                 throw new Error('Network response was not ok');
@@ -135,7 +135,7 @@ document.addEventListener('click', async function (event) {
         const id = extractNumbers(event.target.id);
         const row = document.getElementById('formRow' + id);
         const fileName = document.getElementById('fileName' + id)?.value; // Assicurati di ottenere il valore corretto
-        
+
         const folderPath = '_temp_' + document.getElementById('ragioneSociale_input').value; // Specifica il percorso della cartella
 
         if (row) {
@@ -182,7 +182,7 @@ document.getElementById("music").addEventListener('click', function (event) {
 
             // Imposta il valore del bottone con il valore completo
             document.getElementById("music").value = selectedValue;
-            
+
             // Aggiorna il testo del bottone
             document.getElementById("music").textContent = event.target.textContent;;
         });
@@ -261,6 +261,7 @@ document.getElementById('sendQuery').addEventListener('click', e => {
             console.log(data.message); // Handle successful response
             const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
             controllers.forEach(el => el.disabled = false);
+            document.getElementById('saveAll').disabled = false;
         })
         .catch(error => {
             console.error('Error:', error); // Handle any errors during fetch
@@ -304,12 +305,12 @@ container.addEventListener('click', async (e) => {
 container.addEventListener('change', e => {
 
     if (e.target.matches('[id^="ENGmessageText"]')) {
-        let selector = e.target.id.match(/\d+/);    
-        document.getElementById('ENGcontroller' + selector). disabled = true; 
+        let selector = e.target.id.match(/\d+/);
+        document.getElementById('ENGcontroller' + selector).disabled = true;
 
-    }if (e.target.matches('[id^="messageText"]')){
-        let selector = e.target.id.match(/\d+/);  
-        document.getElementById('controller' + selector). disabled = true;
+    } if (e.target.matches('[id^="messageText"]')) {
+        let selector = e.target.id.match(/\d+/);
+        document.getElementById('controller' + selector).disabled = true;
     }
 });
 
@@ -320,8 +321,44 @@ document.getElementById('ragioneSociale_input').addEventListener('change', e => 
 });
 
 
-document.getElementById('ragioneSociale_input').addEventListener('keypress', function(event) {
+document.getElementById('ragioneSociale_input').addEventListener('keypress', function (event) {
     if (event.key === 'Enter') {
         event.preventDefault(); // Impedisce il ritorno a capo
+    }
+});
+
+// Aggiungi un event listener per ogni textarea
+document.addEventListener('change', (event) => {
+    document.getElementById('saveAll').disabled = true;
+});
+
+
+document.getElementById('saveAll').addEventListener('click', async (e) => {
+    e.preventDefault(); // Prevenire il comportamento predefinito del pulsante (se necessario)
+
+    const folderName = document.getElementById('ragioneSociale_input').value.trim();
+    const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
+
+    if (!folderName) {
+        return window.alert('Il nome della cartella non può essere vuoto.');
+    }
+
+    try {
+        const response = await fetch('/api/save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ folderName, backgroundSong }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Errore nella richiesta.');
+        }
+
+    } catch (error) {
+        window.alert(`Errore: ${error.message}`);
     }
 });
