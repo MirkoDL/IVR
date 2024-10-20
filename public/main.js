@@ -318,3 +318,10 @@ document.getElementById('ragioneSociale_input').addEventListener('change', e => 
         el.disabled = true; // Disabilita gli elementi
     });
 });
+
+
+document.getElementById('ragioneSociale_input').addEventListener('keypress', function(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault(); // Impedisce il ritorno a capo
+    }
+});
