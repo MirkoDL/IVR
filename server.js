@@ -13,6 +13,8 @@ const { getMp3Files } = require('./songs/songArray.js'); // Importa la funzione 
 
 require('dotenv').config({ path: __dirname + '/env/hidden.env' });
 
+const ffmpeg = require('fluent-ffmpeg');
+
 const app = express();
 const PORT = process.env.PORT;
 
@@ -90,7 +92,6 @@ app.post('/api/synthesize', (req, res) => {
             console.error('Errore durante la sintesi:', error);
             res.status(500).json({ message: 'Errore durante la sintesi vocale' });
         }
-        //readMeta(dirPath);
     });
 });
 
@@ -203,20 +204,43 @@ app.post('/delete-audio', (req, res) => {
         return res.status(400).send('Nessun file specificato o cartella mancante.');
     }
 
+    const deletedFiles = [];
+    const failedFiles = [];
+    let pendingOperations = files.length;
+
     files.forEach(fileName => {
         const filePath = path.join(__dirname, folder, fileName); // Usa il percorso della cartella
 
         fs.unlink(filePath, (err) => {
             if (err) {
                 console.error(`Errore durante l'eliminazione di ${fileName}:`, err);
-                return res.status(500).send(`Errore durante l'eliminazione di ${fileName}`);
+                failedFiles.push(fileName);
+            } else {
+                console.log(`File ${fileName} eliminato con successo.`);
+                deletedFiles.push(fileName);
             }
-            console.log(`File ${fileName} eliminato con successo.`);
+
+            pendingOperations--;
+
+            if (pendingOperations === 0) {
+                // Tutte le operazioni di eliminazione sono state completate
+                if (failedFiles.length > 0) {
+                    return res.status(500).send({
+                        message: 'Alcuni file non sono stati eliminati.',
+                        deletedFiles,
+                        failedFiles
+                    });
+                } else {
+                    return res.status(200).send({
+                        message: 'Richiesta di eliminazione completata.',
+                        deletedFiles
+                    });
+                }
+            }
         });
     });
-
-    res.status(200).send('Richiesta di eliminazione completata.');
 });
+
 
 
 
@@ -267,6 +291,90 @@ cron.schedule('0 0 * * *', () => {
         console.error(`Stderr: ${stderr}`);
     });
 });
+
+
+// Endpoint per ricevere folderName e backgroundSong
+app.post('/api/save', (req, res) => {
+    const { folderName, backgroundSong } = req.body;
+    const tempFolderPath = path.join(__dirname, `_temp_${folderName}`);
+    const resultsFolderPath = path.join(__dirname, 'results', folderName);
+
+    console.log(tempFolderPath);
+    console.log(backgroundSong);
+
+    // Verifica se la cartella temporanea esiste
+    fs.access(tempFolderPath, fs.constants.F_OK, (err) => {
+        if (err) {
+            return res.status(404).json({ error: `La cartella ${tempFolderPath} non esiste.` });
+        }
+
+        // Se la cartella results/folderName esiste, rimuovila
+        fs.rm(resultsFolderPath, { recursive: true, force: true }, (err) => {
+            if (err && err.code !== 'ENOENT') {
+                return res.status(500).json({ error: 'Errore nella rimozione della cartella esistente.' });
+            }
+
+            // Crea la cartella results/folderName
+            fs.mkdir(resultsFolderPath, (err) => {
+                if (err) {
+                    return res.status(500).json({ error: 'Errore nella creazione della cartella.' });
+                }
+
+                // Se backgroundSong non è null, copia il file
+                if (backgroundSong) {
+                    const sourceFilePath = path.join('./songs', backgroundSong);
+                    const destFilePath = path.join(resultsFolderPath, backgroundSong);
+
+                    // Verifica se il file esiste prima di copiarlo
+                    fs.access(sourceFilePath, fs.constants.F_OK, (err) => {
+                        if (err) {
+                            return res.status(404).json({ error: `Il file ${sourceFilePath} non esiste.` });
+                        }
+
+                        // Copia il file
+                        fs.copyFile(sourceFilePath, destFilePath, (err) => {
+                            if (err) {
+                                return res.status(500).json({ error: 'Errore nella copia del file.' });
+                            }
+
+                            return res.status(200).json({ message: 'Dati ricevuti e file copiato con successo!', folderName, backgroundSong });
+                        });
+                    });
+                } else {
+                    return res.status(200).json({ message: 'Dati ricevuti con successo, nessun file copiato.', folderName });
+                }
+            });
+        });
+
+    });
+
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 app.listen(PORT, () => {
     console.log(`Server in esecuzione su http://localhost:${process.env.PORT}`);

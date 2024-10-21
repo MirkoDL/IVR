@@ -13,5 +13,9 @@
 }
 
 .dropdown-menu {
-    transform: translate(22px, 45px) !important;
+    transform: translate(23px, 45px) !important;
+}
+
+textarea {
+  resize: none;
 }
