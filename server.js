@@ -213,7 +213,7 @@ app.post('/delete-audio', (req, res) => {
 
         fs.unlink(filePath, (err) => {
             if (err) {
-                console.error(`Errore durante l'eliminazione di ${fileName}:`, err);
+                //console.error(`Errore durante l'eliminazione di ${fileName}:`, err);
                 failedFiles.push(fileName);
             } else {
                 console.log(`File ${fileName} eliminato con successo.`);
@@ -294,59 +294,112 @@ cron.schedule('0 0 * * *', () => {
 
 
 // Endpoint per ricevere folderName e backgroundSong
-app.post('/api/save', (req, res) => {
+async function copyBackgroundSong(sourceFilePath, destFilePath) {
+    try {
+        // Verifica se il file esiste prima di copiarlo
+        await fs.promises.access(sourceFilePath, fs.constants.F_OK);
+
+        // Copia il file
+        await fs.promises.copyFile(sourceFilePath, destFilePath);
+    } catch (err) {
+        throw new Error(`Errore nella copia del file: ${err.message}`);
+    }
+}
+
+function categorizeFiles(tempFolderPath, resultsFolderPath) {
+    const files = fs.readdirSync(tempFolderPath);
+    const resultArray = [];
+    const checkedFiles = new Set();
+
+    for (const file of files) {
+        if (!file.startsWith('eng_') && !checkedFiles.has(file)) {
+            const relatedFile = `eng_${file}`;
+            const fileObject = { files: [file], outputName: file, background: null };
+
+            if (files.includes(relatedFile)) {
+                fileObject.files.push(relatedFile);
+                fileObject.outputName = fileObject.outputName;
+            }
+
+            // Controlla se esiste un file .mp3 nella cartella resultsFolderPath
+            const backgroundFile = fs.readdirSync(resultsFolderPath).find(f => f.endsWith('.mp3'));
+            if (backgroundFile) {
+                fileObject.background = backgroundFile;
+            }
+
+            resultArray.push(fileObject);
+            checkedFiles.add(file);
+            checkedFiles.add(relatedFile);
+        }
+    }
+
+    for (const file of files) {
+        if (file.startsWith('eng_') && !checkedFiles.has(file)) {
+            const originalFile = file.slice(4);
+            const existingObject = resultArray.find(obj => obj.files.includes(originalFile));
+
+            if (existingObject) {
+                existingObject.files.push(file);
+            } else {
+                const fileObject = { files: [file], outputName: originalFile, background: null };
+
+                // Controlla se esiste un file .mp3 nella cartella resultsFolderPath
+                const backgroundFile = fs.readdirSync(resultsFolderPath).find(f => f.endsWith('.mp3'));
+                if (backgroundFile) {
+                    fileObject.background = backgroundFile;
+                }
+
+                resultArray.push(fileObject);
+            }
+
+            checkedFiles.add(file);
+        }
+    }
+
+    return resultArray;
+}
+
+
+// TODO merge files!! FFMPEG
+function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath){
+
+}
+
+
+
+
+
+
+app.post('/api/save', async (req, res) => {
     const { folderName, backgroundSong } = req.body;
     const tempFolderPath = path.join(__dirname, `_temp_${folderName}`);
     const resultsFolderPath = path.join(__dirname, 'results', folderName);
 
-    console.log(tempFolderPath);
-    console.log(backgroundSong);
-
-    // Verifica se la cartella temporanea esiste
-    fs.access(tempFolderPath, fs.constants.F_OK, (err) => {
-        if (err) {
-            return res.status(404).json({ error: `La cartella ${tempFolderPath} non esiste.` });
-        }
+    try {
+        // Verifica se la cartella temporanea esiste
+        await fs.promises.access(tempFolderPath, fs.constants.F_OK);
 
         // Se la cartella results/folderName esiste, rimuovila
-        fs.rm(resultsFolderPath, { recursive: true, force: true }, (err) => {
-            if (err && err.code !== 'ENOENT') {
-                return res.status(500).json({ error: 'Errore nella rimozione della cartella esistente.' });
-            }
+        await fs.promises.rm(resultsFolderPath, { recursive: true, force: true });
 
-            // Crea la cartella results/folderName
-            fs.mkdir(resultsFolderPath, (err) => {
-                if (err) {
-                    return res.status(500).json({ error: 'Errore nella creazione della cartella.' });
-                }
+        // Crea la cartella results/folderName
+        await fs.promises.mkdir(resultsFolderPath);
 
-                // Se backgroundSong non è null, copia il file
-                if (backgroundSong) {
-                    const sourceFilePath = path.join('./songs', backgroundSong);
-                    const destFilePath = path.join(resultsFolderPath, backgroundSong);
+        // Se backgroundSong non è null, copia il file
+        if (backgroundSong) {
+            const sourceFilePath = path.join('./songs', backgroundSong);
+            const destFilePath = path.join(resultsFolderPath, backgroundSong);
+            await copyBackgroundSong(sourceFilePath, destFilePath);
+        }
+        // Unisci i file audio nella cartella temporanea
+        const inputData = categorizeFiles(tempFolderPath, resultsFolderPath);
+        mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath);
 
-                    // Verifica se il file esiste prima di copiarlo
-                    fs.access(sourceFilePath, fs.constants.F_OK, (err) => {
-                        if (err) {
-                            return res.status(404).json({ error: `Il file ${sourceFilePath} non esiste.` });
-                        }
-
-                        // Copia il file
-                        fs.copyFile(sourceFilePath, destFilePath, (err) => {
-                            if (err) {
-                                return res.status(500).json({ error: 'Errore nella copia del file.' });
-                            }
-
-                            return res.status(200).json({ message: 'Dati ricevuti e file copiato con successo!', folderName, backgroundSong });
-                        });
-                    });
-                } else {
-                    return res.status(200).json({ message: 'Dati ricevuti con successo, nessun file copiato.', folderName });
-                }
-            });
-        });
-
-    });
+        return res.status(200).json({ message: 'Dati ricevuti e file copiato con successo!', folderName, backgroundSong });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ error: err.message });
+    }
 
 });
 

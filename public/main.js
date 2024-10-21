@@ -84,7 +84,7 @@ container.addEventListener('change', function (event) {
             const number = event.target.id.replace('translateCheck', ''); // Extract the number from the ID
             const existingEl = document.getElementById('messageText' + number); // Get the corresponding message textarea
             if (existingEl) {
-                // Set the rows attribute of the textarea to 2 for translation
+                // Set the rows attributef of the textarea to 2 for translation
                 existingEl.setAttribute('rows', '2');
                 const existingRow = document.querySelector('.col-md-8 .row:has(textarea#messageText' + number + ')');
 
@@ -165,7 +165,7 @@ document.addEventListener('click', async function (event) {
                 }
                 console.log('File audio eliminati con successo.');
             } catch (error) {
-                console.error('Errore:', error);
+                //console.error('Errore:', error);
             }
         }
     }
@@ -395,6 +395,7 @@ function checkTextareaValue(event) {
 // Aggiungi un event listener all'elemento genitore
 container.addEventListener('focusout', function(event) {
     if (event.target.matches('textarea[id^="fileName"]') && event.target.value != "") {
+        event.target.value = event.target.value.charAt(0).toUpperCase() + event.target.value.slice(1);
         checkTextareaValue(event);
     }
 });
