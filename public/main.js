@@ -131,7 +131,7 @@ document.addEventListener('click', async function (event) {
         return match ? match[0] : null;
     };
 
-    if (event.target.matches('[id^="deleteRow"]')) {
+    if (event.target.matches('[id^="deleteRow"]') && document.querySelectorAll('[id^="formRow"]').length > 1) {
         const id = extractNumbers(event.target.id);
         const row = document.getElementById('formRow' + id);
         const fileName = document.getElementById('fileName' + id)?.value; // Assicurati di ottenere il valore corretto
@@ -360,5 +360,41 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
 
     } catch (error) {
         window.alert(`Errore: ${error.message}`);
+    }
+});
+
+//no duplicate fileName
+function checkTextareaValue(event) {
+    const currentValue = event.target.value;
+    const textareas = document.querySelectorAll('textarea[id^="fileName"]');
+    let duplicateFound = false;
+    let suffix = 1;
+    let newValue = currentValue;
+
+    textareas.forEach(textarea => {
+        if (textarea !== event.target && textarea.value === currentValue) {
+            duplicateFound = true;
+        }
+    });
+
+    while (duplicateFound) {
+        newValue = `${currentValue}(${suffix})`;
+        suffix++;
+        duplicateFound = false;
+        textareas.forEach(textarea => {
+            if (textarea !== event.target && textarea.value === newValue) {
+                duplicateFound = true;
+            }
+        });
+    }
+
+    event.target.value = newValue;
+}
+
+
+// Aggiungi un event listener all'elemento genitore
+container.addEventListener('focusout', function(event) {
+    if (event.target.matches('textarea[id^="fileName"]') && event.target.value != "") {
+        checkTextareaValue(event);
     }
 });

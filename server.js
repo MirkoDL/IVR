@@ -204,20 +204,43 @@ app.post('/delete-audio', (req, res) => {
         return res.status(400).send('Nessun file specificato o cartella mancante.');
     }
 
+    const deletedFiles = [];
+    const failedFiles = [];
+    let pendingOperations = files.length;
+
     files.forEach(fileName => {
         const filePath = path.join(__dirname, folder, fileName); // Usa il percorso della cartella
 
         fs.unlink(filePath, (err) => {
             if (err) {
                 console.error(`Errore durante l'eliminazione di ${fileName}:`, err);
-                return res.status(500).send(`Errore durante l'eliminazione di ${fileName}`);
+                failedFiles.push(fileName);
+            } else {
+                console.log(`File ${fileName} eliminato con successo.`);
+                deletedFiles.push(fileName);
             }
-            console.log(`File ${fileName} eliminato con successo.`);
+
+            pendingOperations--;
+
+            if (pendingOperations === 0) {
+                // Tutte le operazioni di eliminazione sono state completate
+                if (failedFiles.length > 0) {
+                    return res.status(500).send({
+                        message: 'Alcuni file non sono stati eliminati.',
+                        deletedFiles,
+                        failedFiles
+                    });
+                } else {
+                    return res.status(200).send({
+                        message: 'Richiesta di eliminazione completata.',
+                        deletedFiles
+                    });
+                }
+            }
         });
     });
-
-    res.status(200).send('Richiesta di eliminazione completata.');
 });
+
 
 
 
@@ -322,6 +345,7 @@ app.post('/api/save', (req, res) => {
                 }
             });
         });
+
     });
 
 });
