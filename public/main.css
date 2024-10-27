@@ -19,3 +19,8 @@
 textarea {
   resize: none;
 }
+
+.dropdown-menu{
+   height: 400px;
+   overflow: auto;
+}

@@ -80,7 +80,7 @@ container.addEventListener('change', function (event) {
     // Check if the changed element is a checkbox for translation
     if (event.target.matches('input[type="checkbox"]') && event.target.id.startsWith('translateCheck')) {
         if (event.target.checked) { // If the checkbox is checked
-            console.log(event.target.id + ' è stato selezionato'); // Log selection
+            //console.log(event.target.id + ' è stato selezionato'); // Log selection
             const number = event.target.id.replace('translateCheck', ''); // Extract the number from the ID
             const existingEl = document.getElementById('messageText' + number); // Get the corresponding message textarea
             if (existingEl) {
@@ -106,7 +106,7 @@ container.addEventListener('change', function (event) {
             existingButton.parentNode.insertBefore(newButton, existingButton.nextSibling);
 
         } else { // If the checkbox is unchecked
-            console.log(event.target.id + ' è stato deselezionato'); // Log deselection
+            //console.log(event.target.id + ' è stato deselezionato'); // Log deselection
             const number = event.target.id.replace('translateCheck', ''); // Extract the number
             const existingEl = document.getElementById('messageText' + number); // Get the corresponding message textarea
             document.getElementById('ENGcontroller' + number).remove();
@@ -163,7 +163,7 @@ document.addEventListener('click', async function (event) {
                 if (!response.ok) {
                     throw new Error('Errore durante l\'eliminazione dei file');
                 }
-                console.log('File audio eliminati con successo.');
+                //console.log('File audio eliminati con successo.');
             } catch (error) {
                 //console.error('Errore:', error);
             }
@@ -193,6 +193,9 @@ document.getElementById("music").addEventListener('click', function (event) {
 
 // Listen for the 'click' event on the 'sendQuery' button
 document.getElementById('sendQuery').addEventListener('click', e => {
+    document.getElementById('saveAll').disabled = true;
+    const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
+    controllers.forEach(el => el.disabled = true);
     // Initialize company name variable
     let companyName = "";
 
@@ -279,7 +282,7 @@ container.addEventListener('click', async (e) => {
         const controllerName = e.target.id;
 
         try {
-            console.log(`Fetching from: /play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
+            //console.log(`Fetching from: /play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
 
             const response = await fetch(`/play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
             if (response.ok) {
@@ -349,19 +352,32 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ folderName, backgroundSong }),
+            body: JSON.stringify({ folderName, backgroundSong }), // Send data as JSON
         });
 
-        const data = await response.json();
-
         if (!response.ok) {
-            throw new Error(data.error || 'Errore nella richiesta.');
+            const errorData = await response.text(); // Get the error response as text
+            throw new Error(errorData || 'Errore nella richiesta.'); // Handle errors
         }
 
+        // Create a blob from the response
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        
+        // Create a link element
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${folderName}.zip`; // Set the file name for download
+        document.body.appendChild(a); // Append to the body
+        a.click(); // Programmatically click the link to trigger the download
+        a.remove(); // Remove the link after downloading
+        window.URL.revokeObjectURL(url); // Clean up the URL object
+
     } catch (error) {
-        window.alert(`Errore: ${error.message}`);
+        window.alert(`Errore: ${error.message}`); // Alert on error
     }
 });
+
 
 //no duplicate fileName
 function checkTextareaValue(event) {
