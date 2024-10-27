@@ -22,13 +22,17 @@ This project provides a simple tool for creating Interactive Voice Response (IVR
 - 🔤 Auto translation
 - 🌐 Multi language support
 - ✏️ Input-text auto adjustment
+- 📀 Songs upload
+- ⬇️ Download old files
+- 📝 Add transcriptions
 
+<!--
 ## 🤝 Used By
 
 This project is used by the following companies:
 
 [![Ambrogio SRL](https://img.shields.io/badge/Ambrogio_SRL-blue)](https://www.ambrogio.com/)
-
+-->
 
 ## 👥 Author
 
