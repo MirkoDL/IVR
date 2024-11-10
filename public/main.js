@@ -215,7 +215,9 @@ document.getElementById('sendQuery').addEventListener('click', e => {
     if (document.getElementById('ragioneSociale_input').value.length > 0) {
         companyName = document.getElementById('ragioneSociale_input').value;
     } else {
-        alert('Company name is missing'); // Alert the user if the input is empty
+        document.getElementById('errorMessage').innerText = 'Ragione sociale richiesta';
+        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show(); // Mostra il modale
         return; // Stop execution if company name is not provided
     }
 
@@ -243,7 +245,9 @@ document.getElementById('sendQuery').addEventListener('click', e => {
 
             data.push(rowData); // Add the object to the data array
         } else {
-            alert('File name and message text are required for each row.'); // User feedback for missing values
+            document.getElementById('errorMessage').innerText = 'Compila tutti i campi poi premi invio';
+            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show(); // Mostra il modale
             throw new Error('Validation error: File name or message text is missing in a row.'); // Throw an error
         }
     });
@@ -280,7 +284,9 @@ document.getElementById('sendQuery').addEventListener('click', e => {
         })
         .catch(error => {
             console.error('Error:', error); // Handle any errors during fetch
-            alert('An error occurred: ' + error.message); // User feedback for any errors
+            document.getElementById('errorMessage').innerText = 'Si è verificato un errore, riprova'; // Imposta il messaggio di errore
+            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show(); // Mostra il modale
         });
 });
 
@@ -308,11 +314,15 @@ container.addEventListener('click', async (e) => {
                 audioPlayer.load(); // Load the new file
                 audioPlayer.play();
             } else {
-                alert('Canzone non trovata.');
+                document.getElementById('errorMessage').innerText = 'Canzone non trovata'; // Imposta il messaggio di errore
+                let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show(); // Mostra il modale
             }
         } catch (error) {
             console.error('Errore durante la richiesta:', error);
-            alert('Si è verificato un errore. Riprova.');
+            document.getElementById('errorMessage').innerText = 'Si è verificato un errore'; // Imposta il messaggio di errore
+            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show(); // Mostra il modale
         }
     }
 });
@@ -355,7 +365,10 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
     const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
 
     if (!folderName) {
-        return window.alert('Il nome della cartella non può essere vuoto.');
+        document.getElementById('errorMessage').innerText = 'Genera nuovamente i messaggi per proseguire';
+        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show(); // Mostra il modale
+        return;
     }
 
     try {
@@ -386,7 +399,9 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
         window.URL.revokeObjectURL(url); // Clean up the URL object
 
     } catch (error) {
-        window.alert(`Errore: ${error.message}`); // Alert on error
+        document.getElementById('errorMessage').innerText = `Genera nuovamente i messaggi per proseguire`;
+        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show(); // Mostra il modale
     }
 });
 
