@@ -96,7 +96,7 @@ app.post('/api/synthesize', (req, res) => {
 
     //create folder to store _temp messages
     const folderName = '_temp_' + dataArray.companyName;
-    const dirPath = path.join(__dirname, folderName);
+    const dirPath = path.normalize(path.join(__dirname, folderName));
 
     fs.rm(dirPath, { recursive: true, force: true }, async (err) => {
         if (err) {
@@ -205,7 +205,7 @@ async function synthesizeSpeech(polly, text, languageCode, outputPath, playButto
 app.get('/play/:folder/:controllerName', async (req, res) => {
     const folderName = req.params.folder;
     const controllerName = req.params.controllerName;
-    const songsDir = path.join(__dirname, folderName);
+    const songsDir = path.normalize(path.join(__dirname, folderName));
     //console.log(songsDir);
     let songPath = null;
 
@@ -242,7 +242,7 @@ app.get('/play/:folder/:controllerName', async (req, res) => {
 // Endpoint per servire file audio
 app.get('/:folder/:filename', (req, res) => {
     const { folder, filename } = req.params;
-    const filePath = path.join(__dirname, folder, filename);
+    const filePath = path.normalize(path.join(__dirname, folder, filename));
     res.sendFile(filePath);
 });
 
@@ -765,7 +765,7 @@ app.post('/api/save', async (req, res) => {
         await mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath);
 
         // Check for the ZIP file
-        const zipFilePath = path.join(__dirname, 'results', `${folderName}.zip`);
+        const zipFilePath = path.normalize(path.join(__dirname, 'results', `${folderName}.zip`));
         if (!fs.existsSync(zipFilePath)) {
             return res.status(404).json({ error: 'ZIP file not found' });
         }
