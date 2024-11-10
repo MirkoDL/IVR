@@ -1,3 +1,15 @@
+let csrfToken = ''; // Variabile per memorizzare il token CSRF
+
+async function fetchCsrfToken() {
+    const response = await fetch('/api/csrf-token');
+    const data = await response.json();
+    csrfToken = data.csrfToken; // Memorizza il token CSRF
+    //console.log(csrfToken)
+}
+
+// Chiama la funzione per ottenere il token CSRF all'avvio
+fetchCsrfToken();
+
 //populate dropDown
 window.onload = function () {
     fetch('/api/canzoni')
@@ -157,7 +169,7 @@ document.addEventListener('click', async function (event) {
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ files: filesToDelete, folder: folderPath }),
+                    body: JSON.stringify({files: filesToDelete, folder: folderPath, csrfToken }),
                 });
 
                 if (!response.ok) {
@@ -242,14 +254,14 @@ document.getElementById('sendQuery').addEventListener('click', e => {
         song,
         data
     };
-
+    
     // Send the query object to the server using fetch
     fetch('/api/synthesize', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify(query) // Convert the object to JSON
+        body: JSON.stringify({ ...query, csrfToken })    
     })
         .then(response => {
             if (!response.ok) {
@@ -261,7 +273,7 @@ document.getElementById('sendQuery').addEventListener('click', e => {
             return response.json(); // Parse JSON response
         })
         .then(data => {
-            console.log(data.message); // Handle successful response
+            //console.log(data.message); // Handle successful response
             const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
             controllers.forEach(el => el.disabled = false);
             document.getElementById('saveAll').disabled = false;
@@ -352,7 +364,7 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ folderName, backgroundSong }), // Send data as JSON
+            body: JSON.stringify({ folderName, backgroundSong, csrfToken }), // Send data as JSON
         });
 
         if (!response.ok) {

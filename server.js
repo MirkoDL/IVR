@@ -16,6 +16,8 @@ const ffmpeg = require('fluent-ffmpeg');
 
 const archiver = require('archiver');
 
+const { doubleCsrf } = require('csrf-csrf');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT;
@@ -27,16 +29,46 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Serve i file statici dalla cartella 'public'
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.use(cookieParser());
+
+const csrf = doubleCsrf({
+    getSecret: () => process.env.CSRF_KEY,
+    getTokenFromRequest: req => req.body.csrfToken,
+    cookieName: process.env.NODE_ENV === 'production' ? '__Host-prod.x-csrf-token' : '_csrf',
+    cookieOptions: {
+      secure: process.env.NODE_ENV === 'production' // Enable for HTTPS in production
+    }
+});
+
+app.use(csrf.doubleCsrfProtection);
+app.use((req, res, next) => {
+  res.locals.csrfToken = csrf.generateToken(req, res);
+  next();
+});
+
+// Rotta per ottenere il token CSRF
+app.get('/api/csrf-token', (req, res) => {
+    res.json({ csrfToken: req.csrfToken() });
+});
+
+
+
+
+
 // Rotta principale
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'main.html'));
 });
 
+/*
 // Rotta per gestire la richiesta POST
 app.post('/submit', (req, res) => {
-    //console.log('Testo ricevuto:', req.body.text); // Stampa il testo nel terminale
+    // Verifica il token CSRF
+    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+    }
     res.json({ message: 'Testo ricevuto con successo!' }); // Risposta al client
-});
+});*/
 
 // Percorso della directory da cui leggere i file
 const directoryPath = path.join(__dirname, '/songs'); // Cambia 'filesList' con il percorso della tua directory
@@ -55,6 +87,10 @@ app.get('/api/canzoni', async (req, res) => {
 
 
 app.post('/api/synthesize', (req, res) => {
+    // Verifica il token CSRF
+    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+    }
     const dataArray = req.body; // Ottieni i dati inviati
     //console.log(dataArray);
 
@@ -211,6 +247,10 @@ app.get('/:folder/:filename', (req, res) => {
 });
 
 app.post('/delete-audio', (req, res) => {
+    // Verifica il token CSRF
+    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+    }
     const { files, folder } = req.body; // Ottieni i file e la cartella
 
     if (!files || files.length === 0 || !folder) {
@@ -391,7 +431,8 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
         let songsArray = obj.files;
 
         if (songsArray.length === 0) {
-            return; // Skip if no audio files
+            console.warn('No audio files to process for:', obj.outputName);
+            return null; // Skip if no audio files
         }
 
         const songPaths = songsArray.map(song => path.join(tempFolderPath, song));
@@ -412,8 +453,7 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
                     .on('end', async () => {
                         console.log('File converted to WAV and moved successfully:', newFilePath);
                         await addSilenceAtStart(tempFolderPath, resultsFolderPath, outputName);
-                        await saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath);
-                        resolve();
+                        resolve({ TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath });
                     })
                     .on('error', (err) => {
                         console.error('Error converting file:', err);
@@ -441,9 +481,7 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
                         if (backgroundSongPath) {
                             await mergeWithBackgroundSong(outputName, backgroundSongPath, resultsFolderPath, tempFolderPath, backgroundRepeatTimes);
                         }
-                        // Await saveFinal to ensure it runs last
-                        await saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath);
-                        resolve();
+                        resolve({ TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath });
                     })
                     .on('error', (err) => {
                         console.error('Error during merging:', err);
@@ -463,54 +501,57 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
         }
     });
 
-    // Await all promises
+    // Await all promises and gather results
     try {
-        await Promise.all(promises);
+        const results = await Promise.all(promises);
+        
+        // Filter out null results (for cases where there were no audio files)
+        const validResults = results.filter(result => result !== null);
+        
+        // Call saveFinal only once with the accumulated results
+        for (const { TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath } of validResults) {
+            await saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath);
+        }
     } catch (error) {
         console.error('One or more merging processes failed:', error);
     }
 }
 
 
+
 //trim audioFile and save all files in a .zip archive, Finally download client side
 async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath) {
-    let command = ffmpeg();
+    const inputFilePath = path.join(resultsFolderPath, outputName);
     
-    // Use a temporary output name to avoid conflicts
+    // Check if the input file exists
+    if (!fs.existsSync(inputFilePath)) {
+        throw new Error(`Input file does not exist: ${inputFilePath}`);
+    }
+
+    let command = ffmpeg();
     const tempOutputName = `temp_${outputName}`;
     
-    command.input(path.join(resultsFolderPath, outputName));
+    command.input(inputFilePath);
     
     if (backgroundLength && backgroundLength * backgroundRepeatTimes > TTSduration) {
         command.outputOptions('-t', TTSduration + 20); // Set trim duration
     }
     
-    // Merge to the temporary file
     command.mergeToFile(path.join(tempFolderPath, tempOutputName), tempFolderPath);
     
-    // Wait for the command to finish
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
         command
             .on('end', async () => {
-                // Rename the temporary file to the final name
-                fs.renameSync(path.join(tempFolderPath, tempOutputName), path.join(resultsFolderPath, outputName));
+                const finalOutputPath = path.join(resultsFolderPath, outputName);
+                fs.renameSync(path.join(tempFolderPath, tempOutputName), finalOutputPath);
                 
-                // Zip the results folder
                 try {
                     const zipOutputPath = await zipFolder(resultsFolderPath);
                     
-                    // Delete tempFolderPath and resultsFolderPath if they exist
-                    if (fs.existsSync(tempFolderPath)) {
-                        await fs.promises.rm(tempFolderPath, { recursive: true, force: true });
-                        console.log(`Deleted temporary folder: ${tempFolderPath}`);
-                    }
+                    // Clean up temporary folders
+                    await cleanupFolders(tempFolderPath, resultsFolderPath);
                     
-                    if (fs.existsSync(resultsFolderPath)) {
-                        await fs.promises.rm(resultsFolderPath, { recursive: true, force: true });
-                        console.log(`Deleted results folder: ${resultsFolderPath}`);
-                    }
-                    
-                    resolve(zipOutputPath); // Return the path of the zip file
+                    resolve(zipOutputPath);
                 } catch (err) {
                     console.error('Error during zipping folder:', err);
                     reject(err);
@@ -522,6 +563,19 @@ async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, r
             });
     });
 }
+
+async function cleanupFolders(tempFolderPath, resultsFolderPath) {
+    if (fs.existsSync(tempFolderPath)) {
+        await fs.promises.rm(tempFolderPath, { recursive: true, force: true });
+        console.log(`Deleted temporary folder: ${tempFolderPath}`);
+    }
+    
+    if (fs.existsSync(resultsFolderPath)) {
+        await fs.promises.rm(resultsFolderPath, { recursive: true, force: true });
+        console.log(`Deleted results folder: ${resultsFolderPath}`);
+    }
+}
+
 
 
 
@@ -676,6 +730,10 @@ async function getDuration(file) {
 
 
 app.post('/api/save', async (req, res) => {
+    // Verifica il token CSRF
+    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+    }
     const { folderName, backgroundSong } = req.body;
 
     if (!folderName) {
@@ -713,6 +771,7 @@ app.post('/api/save', async (req, res) => {
         }
 
         // Send the ZIP file as a response
+        res.setHeader('Content-Type', 'application/zip');
         res.download(zipFilePath, `${folderName}.zip`, (err) => {
             if (err) {
                 console.error('Error sending the file:', err);
