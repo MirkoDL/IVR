@@ -4,5 +4,6 @@ node_modules/
 =======
 >>>>>>> musicList_from_folder
 _temp_*/
-results/
+results/*
+!results/.gitkeep
 reduceAudioVolume.js
