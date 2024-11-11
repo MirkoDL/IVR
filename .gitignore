@@ -1,7 +1,6 @@
 *.env
 node_modules/
 <<<<<<< HEAD
-songs/
 =======
 songs
 >>>>>>> musicList_from_folder
