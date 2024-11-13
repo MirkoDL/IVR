@@ -9,18 +9,15 @@
 }
 
 #music {
-    width: 300px !important;
-}
-
-.dropdown-menu {
-    transform: translate(23px, 45px) !important;
+  width: 300px !important;
+  overflow: auto;
 }
 
 textarea {
   resize: none;
 }
-
-.dropdown-menu{
-   height: 400px;
-   overflow: auto;
+#music > option {
+  font-size: large;
+  color: white !important;
 }
+

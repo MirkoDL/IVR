@@ -10,12 +10,8 @@ async function getMp3Files(dirPath) {
     try {
         const files = await fs.readdir(dirPath);
         // Filtra i file per ottenere solo quelli con estensione .mp3
-        const mp3Files = files.filter(file => path.extname(file).toLowerCase() === '.mp3');
-        
-        // Aggiungi "Nessuna canzone" all'inizio e ordina l'array
-        const result = ['Nessuna canzone', ...mp3Files.sort()];
-        
-        return result;
+        const mp3Files = files.filter(file => path.extname(file).toLowerCase() === '.mp3');        
+        return [...mp3Files.sort()];
     } catch (err) {
         console.error('Errore nella lettura della directory:', err);
         throw err; // Rilancia l'errore per gestirlo a livello superiore

@@ -20,21 +20,33 @@ window.onload = function () {
             return response.json(); // Supponiamo che il server restituisca un JSON
         })
         .then(data => {
-            dropdownMenu.innerHTML = "";
+            const musicSelect = document.getElementById('music'); // Ottieni il riferimento al <select>
+            musicSelect.innerHTML = ""; // Pulisci le opzioni esistenti
+
+            // Aggiungi un'opzione predefinita
+            let defaultOption = document.createElement('option');
+            defaultOption.value = "blank";
+            defaultOption.textContent = "Nessuna canzone";
+            defaultOption.classList.add("self-align-center");
+            musicSelect.appendChild(defaultOption);
+
             data.forEach(function (value) {
                 // Rimuovi l'estensione .mp3
                 let songName = value.replace('.mp3', '');
-                // Limita il testo a 10 caratteri
+                // Limita il testo a 30 caratteri
                 let displayText = songName.length > 30 ? songName.substring(0, 30).trim() + '...' : songName;
-                let li = document.createElement('li');
-                li.innerHTML = `<a class="dropdown-item" href="#" value="${value}">${displayText}</a>`;
-                dropdownMenu.appendChild(li); // Aggiungi l'elemento <li> al menu a discesa
+                
+                let option = document.createElement('option');
+                option.value = value; // Imposta il valore dell'opzione
+                option.textContent = displayText; // Imposta il testo visualizzato
+                musicSelect.appendChild(option); // Aggiungi l'elemento <option> al <select>
             });
         })
         .catch(error => {
             console.error('C\'è stato un problema con la richiesta:', error);
         });
 };
+
 
 
 // Initialize a counter for dynamically added input fields
@@ -169,7 +181,7 @@ document.addEventListener('click', async function (event) {
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({files: filesToDelete, folder: folderPath, csrfToken }),
+                    body: JSON.stringify({ files: filesToDelete, folder: folderPath, csrfToken }),
                 });
 
                 if (!response.ok) {
@@ -217,7 +229,7 @@ document.getElementById('sendQuery').addEventListener('click', e => {
     } else {
         document.getElementById('errorMessage').innerText = 'Ragione sociale richiesta';
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            modal.show(); // Mostra il modale
+        modal.show(); // Mostra il modale
         return; // Stop execution if company name is not provided
     }
 
@@ -258,14 +270,14 @@ document.getElementById('sendQuery').addEventListener('click', e => {
         song,
         data
     };
-    
+
     // Send the query object to the server using fetch
     fetch('/api/synthesize', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ ...query, csrfToken })    
+        body: JSON.stringify({ ...query, csrfToken })
     })
         .then(response => {
             if (!response.ok) {
@@ -316,7 +328,7 @@ container.addEventListener('click', async (e) => {
             } else {
                 document.getElementById('errorMessage').innerText = 'Canzone non trovata'; // Imposta il messaggio di errore
                 let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            modal.show(); // Mostra il modale
+                modal.show(); // Mostra il modale
             }
         } catch (error) {
             console.error('Errore durante la richiesta:', error);
@@ -367,7 +379,7 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
     if (!folderName) {
         document.getElementById('errorMessage').innerText = 'Genera nuovamente i messaggi per proseguire';
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            modal.show(); // Mostra il modale
+        modal.show(); // Mostra il modale
         return;
     }
 
@@ -388,7 +400,7 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
         // Create a blob from the response
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
-        
+
         // Create a link element
         const a = document.createElement('a');
         a.href = url;
@@ -401,7 +413,7 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
     } catch (error) {
         document.getElementById('errorMessage').innerText = `Genera nuovamente i messaggi per proseguire`;
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            modal.show(); // Mostra il modale
+        modal.show(); // Mostra il modale
     }
 });
 
@@ -436,9 +448,107 @@ function checkTextareaValue(event) {
 
 
 // Aggiungi un event listener all'elemento genitore
-container.addEventListener('focusout', function(event) {
+container.addEventListener('focusout', function (event) {
     if (event.target.matches('textarea[id^="fileName"]') && event.target.value != "") {
         event.target.value = event.target.value.charAt(0).toUpperCase() + event.target.value.slice(1);
         checkTextareaValue(event);
     }
+});
+
+
+//chage focus with TAB
+document.addEventListener('keydown', function (event) {
+    const textareas = document.querySelectorAll('textarea');
+    if (event.key === 'Tab') {
+        event.preventDefault(); // Previene il comportamento predefinito del tasto TAB
+
+        // Trova l'indice dell'elemento attualmente a fuoco
+        const focusedElement = document.activeElement;
+        const index = Array.prototype.indexOf.call(textareas, focusedElement);
+
+        // Calcola il prossimo indice
+        let nextIndex = (index + 1) % textareas.length; // Torna all'inizio se siamo all'ultimo
+
+        // Imposta il focus sul prossimo textarea
+        textareas[nextIndex].focus();
+    }
+});
+
+/*
+document.addEventListener('keydown', function (event) {
+    const currentTime = new Date().getTime();
+
+    // Se è passato più di un secondo dall'ultima pressione di un tasto, resettiamo i caratteri digitati
+    if (currentTime - lastKeyPressTime > 1000) {
+        typedCharacters = '';
+    }
+
+    lastKeyPressTime = currentTime;
+
+    // Aggiungiamo il carattere digitato
+    typedCharacters += event.key;
+
+    // Cerchiamo un elemento che inizia con i caratteri digitati
+    for (let item of dropdownItems) {
+        if (item.textContent.toLowerCase().startsWith(typedCharacters.toLowerCase())) {
+            item.focus(); // Imposta il focus sull'elemento trovato
+            break; // Esci dal ciclo dopo aver trovato il primo match
+        }
+    }
+});
+
+
+const dropdownItems = document.querySelectorAll('.dropdown-item');
+let lastKeyPressTime = 0;
+let typedCharacters = '';
+
+document.addEventListener('keydown', function (event) {
+    const currentTime = new Date().getTime();
+
+    // Se è passato più di un secondo dall'ultima pressione di un tasto, resettiamo i caratteri digitati
+    if (currentTime - lastKeyPressTime > 1000) {
+        typedCharacters = '';
+    }
+
+    lastKeyPressTime = currentTime;
+
+    // Controlliamo se il tasto premuto è una lettera
+    if (event.key.length === 1 && event.key.match(/[a-zA-Z]/)) {
+        // Aggiungiamo il carattere digitato
+        typedCharacters = event.key;
+        console.log(typedCharacters)
+
+        // Cerchiamo un elemento che inizia con i caratteri digitati
+        for (let item of dropdownItems) {
+            if (item.textContent.toLowerCase().startsWith(typedCharacters.toLowerCase())) {
+                item.focus(); // Imposta il focus sull'elemento trovato
+                break; // Esci dal ciclo dopo aver trovato il primo match
+            }
+        }
+    }
+});
+*/
+  
+function handleKeyDown(event) {
+    const key = event.key.toLowerCase();
+    const items = document.getElementById('dropdownMenu').getElementsByTagName('li');
+    console.log(items)
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].innerText.toLowerCase().startsWith(key)) {
+            ; // Imposta il focus sull'elemento corrispondente
+            document.getElementById('music').innerText = items[i].innerText;
+            document.getElementById('dropdownMenu').scrollIntoView({ behavior: "instant", block: "start"});
+            break; // Esci dal ciclo dopo aver trovato il primo elemento corrispondente
+        }
+    }
+
+}
+
+document.getElementById('music').addEventListener('focus', function () {
+    document.addEventListener('keydown', handleKeyDown);
+
+});
+
+document.getElementById('music').addEventListener('blur', function () {
+    document.removeEventListener('keydown', handleKeyDown);
 });

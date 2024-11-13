@@ -203,6 +203,7 @@ async function synthesizeSpeech(polly, text, languageCode, outputPath, playButto
 }
 
 app.get('/play/:folder/:controllerName', async (req, res) => {
+    //TODO add folder check for security
     const folderName = req.params.folder;
     const controllerName = req.params.controllerName;
     const songsDir = path.normalize(path.join(__dirname, folderName));
@@ -333,7 +334,7 @@ cleanupTempFolders();
 
 
 // Pianifica il riavvio del server ogni giorno a mezzogiorno
-cron.schedule('0 0 * * *', () => {
+/*cron.schedule('0 0 * * *', () => {
     console.log('Riavvio del server programmato...');
     exec('pm2 restart IVR_server', (err, stdout, stderr) => {
         if (err) {
@@ -344,7 +345,7 @@ cron.schedule('0 0 * * *', () => {
         console.error(`Stderr: ${stderr}`);
     });
 });
-
+*/
 
 // Endpoint per ricevere folderName e backgroundSong
 async function copyBackgroundSong(sourceFilePath, destFilePath) {
@@ -423,7 +424,7 @@ function categorizeFiles(tempFolderPath, resultsFolderPath) {
 
 
 async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
-    const silencePath = path.join('_private', 'silence.mp3'); // Path to silence file
+    const silencePath = path.join('_private', 'mixSilence.mp3'); // Path to silence file
 
     const promises = inputData.map(async (obj) => {
         let outputName = obj.outputName.replace(/\.(mp3|wav)$/, '') + '.wav';
@@ -431,7 +432,7 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
         let songsArray = obj.files;
 
         if (songsArray.length === 0) {
-            console.warn('No audio files to process for:', obj.outputName);
+            console.log('No audio files to process for:', obj.outputName);
             return null; // Skip if no audio files
         }
 
@@ -619,7 +620,7 @@ function addSilenceAtStart(tempFolderPath, resultsFolderPath, outputName) {
     const tempOutputPath = path.join(tempFolderPath, `longer_${outputName}`); // Usa un nome diverso per l'output
     return new Promise((resolve, reject) => {
         ffmpeg()
-            .input('_private/silence.mp3') // Il file audio da aggiungere
+            .input('_private/startSilence.mp3') // Il file audio da aggiungere
             .input(path.join(resultsFolderPath, outputName)) // Il file audio principale
             .complexFilter([
                 '[0:a][1:a]concat=n=2:v=0:a=1[out]' // Concatenazione delle tracce audio
@@ -659,7 +660,7 @@ function mergeWithBackgroundSong(outputName, backgroundSongPath, resultsFolderPa
     return new Promise((resolve, reject) => {
         command
             .input(primaryAudioPath)
-            .complexFilter(`amix=inputs=2:duration=longest[a]`) // Assicurati che il numero di input sia corretto
+            .complexFilter(`[0:a]anull[a0];[1:a]volume=3.0[a1];[a0][a1]amix=inputs=2:duration=longest[a]`) // Assicurati che il numero di input sia corretto
             .outputOptions('-map', '[a]')
             .save(tempOutputPath)
             .on('end', () => {
