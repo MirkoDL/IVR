@@ -161,8 +161,8 @@ async function synthesizeSpeech(polly, text, languageCode, outputPath, playButto
 
     try {
         const command = new SynthesizeSpeechCommand(params);
+        console.log(command)
         const data = await polly.send(command);
-
         // Controlla se AudioStream è un flusso
         if (data.AudioStream instanceof Readable) {
             const writeStream = fs.createWriteStream(outputPath);

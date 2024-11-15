@@ -217,6 +217,7 @@ document.getElementById("music").addEventListener('click', function (event) {
 
 // Listen for the 'click' event on the 'sendQuery' button
 document.getElementById('sendQuery').addEventListener('click', e => {
+    document.getElementById('loader').style.display = 'block';
     document.getElementById('saveAll').disabled = true;
     const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
     controllers.forEach(el => el.disabled = true);
@@ -293,6 +294,7 @@ document.getElementById('sendQuery').addEventListener('click', e => {
             const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
             controllers.forEach(el => el.disabled = false);
             document.getElementById('saveAll').disabled = false;
+            document.getElementById('loader').style.display = 'none';
         })
         .catch(error => {
             console.error('Error:', error); // Handle any errors during fetch
@@ -372,7 +374,7 @@ document.addEventListener('change', (event) => {
 
 document.getElementById('saveAll').addEventListener('click', async (e) => {
     e.preventDefault(); // Prevenire il comportamento predefinito del pulsante (se necessario)
-
+    document.getElementById('loader').style.display = 'block';
     const folderName = document.getElementById('ragioneSociale_input').value.trim();
     const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
 
@@ -408,7 +410,8 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
         document.body.appendChild(a); // Append to the body
         a.click(); // Programmatically click the link to trigger the download
         a.remove(); // Remove the link after downloading
-        window.URL.revokeObjectURL(url); // Clean up the URL object
+        window.URL.revokeObjectURL(url); // Clean up the URL object 
+        document.getElementById('loader').style.display = 'none';
 
     } catch (error) {
         document.getElementById('errorMessage').innerText = `Genera nuovamente i messaggi per proseguire`;
