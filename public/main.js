@@ -10,8 +10,44 @@ async function fetchCsrfToken() {
 // Chiama la funzione per ottenere il token CSRF all'avvio
 fetchCsrfToken();
 
-//populate dropDown
-window.onload = function () {
+// Variabile per tenere traccia dello stato dei pulsanti
+let originalButtonStates = [];
+
+// Funzione per attivare il loader
+function showLoader() {
+    // Imposta l'opacità di .container a 0.5
+    document.querySelector('.container').style.opacity = '0.5';
+
+    // Disabilita tutti i pulsanti nella pagina
+    const buttons = document.querySelectorAll('button');
+    originalButtonStates = Array.from(buttons).map(button => button.disabled);
+    buttons.forEach(button => button.disabled = true);
+}
+
+// Funzione per disattivare il loader
+function hideLoader() {
+
+    // Ripristina l'opacità di .container a 1
+    document.querySelector('.container').style.opacity = '1';
+
+    // Abilita i pulsanti precedentemente disabilitati
+    const buttons = document.querySelectorAll('button');
+    buttons.forEach((button, index) => {
+        button.disabled = originalButtonStates[index];
+    });
+}
+
+
+window.addEventListener('load', function () {
+    const textareas = document.querySelectorAll('textarea');
+    textareas.forEach(textarea => {
+        textarea.value = ''; // Imposta il valore a una stringa vuota
+    });
+    const checkboxes = document.querySelectorAll('input[type="checkbox"][id^="translateCheck"]');
+    checkboxes.forEach(checkbox => {
+        checkbox.checked = false; // Imposta il checkbox come non selezionato
+    });
+
     fetch('/api/canzoni')
         .then(response => {
             if (!response.ok) {
@@ -35,7 +71,7 @@ window.onload = function () {
                 let songName = value.replace('.mp3', '');
                 // Limita il testo a 30 caratteri
                 let displayText = songName.length > 30 ? songName.substring(0, 30).trim() + '...' : songName;
-                
+
                 let option = document.createElement('option');
                 option.value = value; // Imposta il valore dell'opzione
                 option.textContent = displayText; // Imposta il testo visualizzato
@@ -45,8 +81,7 @@ window.onload = function () {
         .catch(error => {
             console.error('C\'è stato un problema con la richiesta:', error);
         });
-};
-
+});
 
 
 // Initialize a counter for dynamically added input fields
@@ -217,7 +252,7 @@ document.getElementById("music").addEventListener('click', function (event) {
 
 // Listen for the 'click' event on the 'sendQuery' button
 document.getElementById('sendQuery').addEventListener('click', e => {
-    document.getElementById('loader').style.display = 'block';
+    showLoader();
     document.getElementById('saveAll').disabled = true;
     const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
     controllers.forEach(el => el.disabled = true);
@@ -230,6 +265,7 @@ document.getElementById('sendQuery').addEventListener('click', e => {
     } else {
         document.getElementById('errorMessage').innerText = 'Ragione sociale richiesta';
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+        hideLoader();
         modal.show(); // Mostra il modale
         return; // Stop execution if company name is not provided
     }
@@ -260,6 +296,7 @@ document.getElementById('sendQuery').addEventListener('click', e => {
         } else {
             document.getElementById('errorMessage').innerText = 'Compila tutti i campi poi premi invio';
             let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            hideLoader();
             modal.show(); // Mostra il modale
             throw new Error('Validation error: File name or message text is missing in a row.'); // Throw an error
         }
@@ -291,15 +328,17 @@ document.getElementById('sendQuery').addEventListener('click', e => {
         })
         .then(data => {
             //console.log(data.message); // Handle successful response
+            hideLoader();
             const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
             controllers.forEach(el => el.disabled = false);
             document.getElementById('saveAll').disabled = false;
-            document.getElementById('loader').style.display = 'none';
+
         })
         .catch(error => {
             console.error('Error:', error); // Handle any errors during fetch
             document.getElementById('errorMessage').innerText = 'Si è verificato un errore, riprova'; // Imposta il messaggio di errore
             let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            hideLoader();
             modal.show(); // Mostra il modale
         });
 });
@@ -330,18 +369,20 @@ container.addEventListener('click', async (e) => {
             } else {
                 document.getElementById('errorMessage').innerText = 'Canzone non trovata'; // Imposta il messaggio di errore
                 let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+                hideLoader();
                 modal.show(); // Mostra il modale
             }
         } catch (error) {
             console.error('Errore durante la richiesta:', error);
             document.getElementById('errorMessage').innerText = 'Si è verificato un errore'; // Imposta il messaggio di errore
             let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            hideLoader();
             modal.show(); // Mostra il modale
         }
     }
 });
 
-container.addEventListener('change', e => {
+container.addEventListener('input', e => {
 
     if (e.target.matches('[id^="ENGmessageText"]')) {
         let selector = e.target.id.match(/\d+/);
@@ -353,7 +394,7 @@ container.addEventListener('change', e => {
     }
 });
 
-document.getElementById('ragioneSociale_input').addEventListener('change', e => {
+document.getElementById('ragioneSociale_input').addEventListener('input', e => {
     document.querySelectorAll('[id^="controller"], [id^="ENGcontroller"]').forEach(el => {
         el.disabled = true; // Disabilita gli elementi
     });
@@ -374,13 +415,14 @@ document.addEventListener('change', (event) => {
 
 document.getElementById('saveAll').addEventListener('click', async (e) => {
     e.preventDefault(); // Prevenire il comportamento predefinito del pulsante (se necessario)
-    document.getElementById('loader').style.display = 'block';
+    showLoader();
     const folderName = document.getElementById('ragioneSociale_input').value.trim();
     const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
 
     if (!folderName) {
         document.getElementById('errorMessage').innerText = 'Genera nuovamente i messaggi per proseguire';
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+        hideLoader();
         modal.show(); // Mostra il modale
         return;
     }
@@ -411,11 +453,12 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
         a.click(); // Programmatically click the link to trigger the download
         a.remove(); // Remove the link after downloading
         window.URL.revokeObjectURL(url); // Clean up the URL object 
-        document.getElementById('loader').style.display = 'none';
+        hideLoader();
 
     } catch (error) {
         document.getElementById('errorMessage').innerText = `Genera nuovamente i messaggi per proseguire`;
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+        hideLoader();
         modal.show(); // Mostra il modale
     }
 });
@@ -477,61 +520,7 @@ document.addEventListener('keydown', function (event) {
     }
 });
 
-/*
-document.addEventListener('keydown', function (event) {
-    const currentTime = new Date().getTime();
 
-    // Se è passato più di un secondo dall'ultima pressione di un tasto, resettiamo i caratteri digitati
-    if (currentTime - lastKeyPressTime > 1000) {
-        typedCharacters = '';
-    }
-
-    lastKeyPressTime = currentTime;
-
-    // Aggiungiamo il carattere digitato
-    typedCharacters += event.key;
-
-    // Cerchiamo un elemento che inizia con i caratteri digitati
-    for (let item of dropdownItems) {
-        if (item.textContent.toLowerCase().startsWith(typedCharacters.toLowerCase())) {
-            item.focus(); // Imposta il focus sull'elemento trovato
-            break; // Esci dal ciclo dopo aver trovato il primo match
-        }
-    }
-});
-
-
-const dropdownItems = document.querySelectorAll('.dropdown-item');
-let lastKeyPressTime = 0;
-let typedCharacters = '';
-
-document.addEventListener('keydown', function (event) {
-    const currentTime = new Date().getTime();
-
-    // Se è passato più di un secondo dall'ultima pressione di un tasto, resettiamo i caratteri digitati
-    if (currentTime - lastKeyPressTime > 1000) {
-        typedCharacters = '';
-    }
-
-    lastKeyPressTime = currentTime;
-
-    // Controlliamo se il tasto premuto è una lettera
-    if (event.key.length === 1 && event.key.match(/[a-zA-Z]/)) {
-        // Aggiungiamo il carattere digitato
-        typedCharacters = event.key;
-        console.log(typedCharacters)
-
-        // Cerchiamo un elemento che inizia con i caratteri digitati
-        for (let item of dropdownItems) {
-            if (item.textContent.toLowerCase().startsWith(typedCharacters.toLowerCase())) {
-                item.focus(); // Imposta il focus sull'elemento trovato
-                break; // Esci dal ciclo dopo aver trovato il primo match
-            }
-        }
-    }
-});
-*/
-  
 function handleKeyDown(event) {
     const key = event.key.toLowerCase();
     const items = document.getElementById('dropdownMenu').getElementsByTagName('li');
@@ -540,7 +529,7 @@ function handleKeyDown(event) {
         if (items[i].innerText.toLowerCase().startsWith(key)) {
             ; // Imposta il focus sull'elemento corrispondente
             document.getElementById('music').innerText = items[i].innerText;
-            document.getElementById('dropdownMenu').scrollIntoView({ behavior: "instant", block: "start"});
+            document.getElementById('dropdownMenu').scrollIntoView({ behavior: "instant", block: "start" });
             break; // Esci dal ciclo dopo aver trovato il primo elemento corrispondente
         }
     }
@@ -554,4 +543,48 @@ document.getElementById('music').addEventListener('focus', function () {
 
 document.getElementById('music').addEventListener('blur', function () {
     document.removeEventListener('keydown', handleKeyDown);
+});
+
+function checkTextareaInput(element) {
+    const alertToastBody = document.getElementById('alertToastBody');
+    const alertToast = document.getElementById('alertToast');
+    const toast = new bootstrap.Toast(alertToast, {
+        delay: 3000 // Imposta il tempo di visualizzazione a 2000 millisecondi (2 secondi)
+    });
+
+    // Seleziona tutte le textarea con nome che corrisponde al pattern
+    const invalidChars = /[<>&]/; // Caratteri non validi
+    let hasInvalidChars = false;
+
+    // Controlla se l'elemento corrente ha caratteri non validi
+    if (invalidChars.test(element.value)) {
+        hasInvalidChars = true;
+        // Evidenzia il textarea in rosso
+        element.style.borderColor = 'red';
+        alertToastBody.innerHTML = "<p>I caratteri <b>&<></b> non sono ammessi</p>";
+
+        // Controlla se il toast è già visibile
+        if (!alertToast.classList.contains('show')) {
+            toast.show();
+        }
+    } else {
+        // Ripristina il colore del bordo se non ci sono caratteri non validi
+        element.style.borderColor = '';
+    }
+
+    // Disabilita o abilita il bottone #sendQuery
+    const sendButton = document.getElementById('sendQuery');
+    
+    // Verifica tutti i campi textarea per caratteri non validi
+    const textareas = document.querySelectorAll('textarea[id^="ENGmessageText"], textarea[id^="messageText"]');
+    hasInvalidChars = Array.from(textareas).some(textarea => invalidChars.test(textarea.value));
+
+    sendButton.disabled = hasInvalidChars;
+}
+
+// Aggiungi l'event listener per il container
+container.addEventListener('input', e => {
+    if (e.target.matches('[id^="ENGmessageText"]') || e.target.matches('[id^="messageText"]')) {
+        checkTextareaInput(e.target);
+    }
 });

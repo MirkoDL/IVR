@@ -20,18 +20,3 @@ textarea {
   font-size: large;
   color: white !important;
 }
-
-.loader {
-  border: 3px solid #f3f3f3; /* Colore di sfondo */
-  border-top: 3px solid #007bff; /* Colore della parte superiore */
-  border-radius: 50%; /* Rende il cerchio */
-  width: 40px; /* Larghezza del cerchio */
-  height: 40px; /* Altezza del cerchio */
-  animation: spin 1s linear infinite; /* Animazione di rotazione */
-  
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
