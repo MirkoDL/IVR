@@ -287,8 +287,8 @@ document.getElementById('sendQuery').addEventListener('click', e => {
         if (fileName && messageText && (!engMessageText || engMessageText.value.trim() !== '')) {
             const rowData = {
                 fileName: fileName,
-                messageText: messageText,
-                engMessageText: engMessageText ? engMessageText.value.trim() : null, // Trim if it exists
+                messageText: escapeString(messageText),
+                engMessageText: engMessageText ? escapeString(engMessageText.value.trim()) : null, // Trim if it exists
                 playButtonId: playButtonId
             };
 
@@ -524,7 +524,6 @@ document.addEventListener('keydown', function (event) {
 function handleKeyDown(event) {
     const key = event.key.toLowerCase();
     const items = document.getElementById('dropdownMenu').getElementsByTagName('li');
-    console.log(items)
     for (let i = 0; i < items.length; i++) {
         if (items[i].innerText.toLowerCase().startsWith(key)) {
             ; // Imposta il focus sull'elemento corrispondente
@@ -553,7 +552,7 @@ function checkTextareaInput(element) {
     });
 
     // Seleziona tutte le textarea con nome che corrisponde al pattern
-    const invalidChars = /[<>&]/; // Caratteri non validi
+    const invalidChars = /[&'"<>]/; // Caratteri non validi
     let hasInvalidChars = false;
 
     // Controlla se l'elemento corrente ha caratteri non validi
@@ -574,7 +573,7 @@ function checkTextareaInput(element) {
 
     // Disabilita o abilita il bottone #sendQuery
     const sendButton = document.getElementById('sendQuery');
-    
+
     // Verifica tutti i campi textarea per caratteri non validi
     const textareas = document.querySelectorAll('textarea[id^="ENGmessageText"], textarea[id^="messageText"]');
     hasInvalidChars = Array.from(textareas).some(textarea => invalidChars.test(textarea.value));
@@ -585,6 +584,95 @@ function checkTextareaInput(element) {
 // Aggiungi l'event listener per il container
 container.addEventListener('input', e => {
     if (e.target.matches('[id^="ENGmessageText"]') || e.target.matches('[id^="messageText"]')) {
-        checkTextareaInput(e.target);
+        //checkTextareaInput(e.target);
     }
 });
+
+function a(input) {
+    // Funzione per eseguire l'escape dei caratteri speciali
+    const escapeChars = (str) => {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    };
+
+    // Regex per trovare il contenuto tra parentesi quadre
+    const regex = /$$([^$$]+)\]/g;
+
+    // Sostituiamo il contenuto tra parentesi quadre con un segnaposto
+    let placeholders = [];
+    let modifiedInput = input.replace(regex, (match, p1) => {
+        placeholders.push(p1); // Salviamo il contenuto
+        return `{{${placeholders.length - 1}}}`; // Sostituiamo con un segnaposto
+    });
+
+    // Eseguiamo l'escape dei caratteri speciali
+    modifiedInput = escapeChars(modifiedInput);
+
+    // Ripristiniamo il contenuto originale delle parentesi quadre
+    placeholders.forEach((placeholder, index) => {
+        modifiedInput = modifiedInput.replace(`{{${index}}}`, placeholder);
+    });
+
+    // Rimuoviamo le parentesi quadre
+    console.log(modifiedInput.replace(/$$|$$/g, ''))
+    return modifiedInput.replace(/$$|$$/g, '');
+}
+
+function aa(str) {
+    // Esegui l'escape dei caratteri speciali, ignorando il contenuto all'interno delle parentesi quadre
+    let escapedStr = str.replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    // Rimuovi le parentesi quadre e il loro contenuto
+    console.log(escapedStr.replace(/$$[^$$]*\]/g, ''))
+    return escapedStr.replace(/$$[^$$]*\]/g, '');
+
+}
+
+function escapeString(str) {
+    // Utilizza una regex per trovare le parti della stringa
+    const parts = str.split('');
+    
+    // Esegui l'escape solo sulle parti che non sono tra parentesi quadre
+    for (let i = 0; i < parts.length; i++) {
+        if(parts[i] == '['){
+            while(parts[i] != ']'){
+                i++;
+            }
+        }else{
+            switch (parts[i]) {
+                case '&':
+                    parts[i] = '&amp;';
+                    break;
+                case '<':
+                    parts[i] = '&lt;';
+                    break;
+                case '>':
+                    parts[i] = '&gt;';
+                    break;
+                case '"':
+                    parts[i] = '&quot;';
+                    break;
+                case "'":
+                    parts[i] = '&apos;';
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    // Riassembla la stringa
+    return parts.join('');
+}
+
+
+
+
