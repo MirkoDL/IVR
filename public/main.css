@@ -20,3 +20,9 @@ textarea {
   font-size: large;
   color: white !important;
 }
+.info-button {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1050; /* Assicurati che il bottone sia sopra altri elementi */
+}

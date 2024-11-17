@@ -544,98 +544,6 @@ document.getElementById('music').addEventListener('blur', function () {
     document.removeEventListener('keydown', handleKeyDown);
 });
 
-function checkTextareaInput(element) {
-    const alertToastBody = document.getElementById('alertToastBody');
-    const alertToast = document.getElementById('alertToast');
-    const toast = new bootstrap.Toast(alertToast, {
-        delay: 3000 // Imposta il tempo di visualizzazione a 2000 millisecondi (2 secondi)
-    });
-
-    // Seleziona tutte le textarea con nome che corrisponde al pattern
-    const invalidChars = /[&'"<>]/; // Caratteri non validi
-    let hasInvalidChars = false;
-
-    // Controlla se l'elemento corrente ha caratteri non validi
-    if (invalidChars.test(element.value)) {
-        hasInvalidChars = true;
-        // Evidenzia il textarea in rosso
-        element.style.borderColor = 'red';
-        alertToastBody.innerHTML = "<p>I caratteri <b>&<></b> non sono ammessi</p>";
-
-        // Controlla se il toast è già visibile
-        if (!alertToast.classList.contains('show')) {
-            toast.show();
-        }
-    } else {
-        // Ripristina il colore del bordo se non ci sono caratteri non validi
-        element.style.borderColor = '';
-    }
-
-    // Disabilita o abilita il bottone #sendQuery
-    const sendButton = document.getElementById('sendQuery');
-
-    // Verifica tutti i campi textarea per caratteri non validi
-    const textareas = document.querySelectorAll('textarea[id^="ENGmessageText"], textarea[id^="messageText"]');
-    hasInvalidChars = Array.from(textareas).some(textarea => invalidChars.test(textarea.value));
-
-    sendButton.disabled = hasInvalidChars;
-}
-
-// Aggiungi l'event listener per il container
-container.addEventListener('input', e => {
-    if (e.target.matches('[id^="ENGmessageText"]') || e.target.matches('[id^="messageText"]')) {
-        //checkTextareaInput(e.target);
-    }
-});
-
-function a(input) {
-    // Funzione per eseguire l'escape dei caratteri speciali
-    const escapeChars = (str) => {
-        return str
-            .replace(/&/g, '&amp;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
-    };
-
-    // Regex per trovare il contenuto tra parentesi quadre
-    const regex = /$$([^$$]+)\]/g;
-
-    // Sostituiamo il contenuto tra parentesi quadre con un segnaposto
-    let placeholders = [];
-    let modifiedInput = input.replace(regex, (match, p1) => {
-        placeholders.push(p1); // Salviamo il contenuto
-        return `{{${placeholders.length - 1}}}`; // Sostituiamo con un segnaposto
-    });
-
-    // Eseguiamo l'escape dei caratteri speciali
-    modifiedInput = escapeChars(modifiedInput);
-
-    // Ripristiniamo il contenuto originale delle parentesi quadre
-    placeholders.forEach((placeholder, index) => {
-        modifiedInput = modifiedInput.replace(`{{${index}}}`, placeholder);
-    });
-
-    // Rimuoviamo le parentesi quadre
-    console.log(modifiedInput.replace(/$$|$$/g, ''))
-    return modifiedInput.replace(/$$|$$/g, '');
-}
-
-function aa(str) {
-    // Esegui l'escape dei caratteri speciali, ignorando il contenuto all'interno delle parentesi quadre
-    let escapedStr = str.replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-
-    // Rimuovi le parentesi quadre e il loro contenuto
-    console.log(escapedStr.replace(/$$[^$$]*\]/g, ''))
-    return escapedStr.replace(/$$[^$$]*\]/g, '');
-
-}
-
 function escapeString(str) {
     // Utilizza una regex per trovare le parti della stringa
     const parts = str.split('');
@@ -673,6 +581,13 @@ function escapeString(str) {
     return parts.join('');
 }
 
-
-
-
+document.getElementById('copyButton1').addEventListener('click', function() {
+    const textToCopy = '<say-as interpret-as="telephone">XX</say-as>';
+    navigator.clipboard.writeText(textToCopy).then(function() {
+        // Chiudi il modal dopo la copia
+        const modalElement = document.getElementById('infoModal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        modal.hide();
+    }).catch(function(err) {
+    });
+});

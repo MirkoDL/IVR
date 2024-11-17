@@ -95,15 +95,27 @@
             </div>
         </div>
     </div>
-    <div class="mt-2 bg-primary toast align-items-center position-fixed top-0 start-50 translate-middle-x" role="alert"
-     aria-live="assertive" aria-atomic="true" id="alertToast" style="width: 200px;"> <!-- Imposta una larghezza fissa -->
-    <div class="d-flex justify-content-center align-items-center" style="height: 60px;"> <!-- Aggiungi align-items-center e imposta un'altezza -->
-        <div class="toast-body text-white text-center" id="alertToastBody">
-            Questo è un messaggio di toast centrato!
+
+    <!-- LEGENDA -->
+    <button type="button" class="btn btn-info info-button" data-bs-toggle="modal" data-bs-target="#infoModal">
+        i
+    </button>
+
+    <!-- Modal -->
+      <div class="modal fade" id="infoModal" tabindex="-1" aria-labelledby="infoModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header text-center">
+                    <h5 class="modal-title w-100" id="infoModalLabel">Legenda Comandi</h5>
+                </div>
+                <div class="modal-body">
+                    <b>&lt;say-as interpret-as=&quot;telephone&quot;&gt;XX&lt;/say-as&gt;</b>
+                    <button id="copyButton1" class="btn btn-success btn-sm">Copia</button>
+                    <p>Legge il numero come un telefono.</p>
+                </div>
+            </div>
         </div>
     </div>
-</div>
-
 
 
 
