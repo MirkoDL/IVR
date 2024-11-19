@@ -26,3 +26,16 @@ textarea {
   right: 20px;
   z-index: 1050; /* Assicurati che il bottone sia sopra altri elementi */
 }
+#audioPlayer {
+  display: none;
+}
+
+.rowLine hr {
+  width: 100%;
+}
+#successToast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+}

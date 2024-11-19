@@ -8,3 +8,5 @@ results/*
 !results/.gitkeep
 reduceAudioVolume.js
 processSongs.js
+.git/
+env/

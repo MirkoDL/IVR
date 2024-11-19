@@ -37,18 +37,8 @@ function hideLoader() {
     });
 }
 
-
-window.addEventListener('load', function () {
-    const textareas = document.querySelectorAll('textarea');
-    textareas.forEach(textarea => {
-        textarea.value = ''; // Imposta il valore a una stringa vuota
-    });
-    const checkboxes = document.querySelectorAll('input[type="checkbox"][id^="translateCheck"]');
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = false; // Imposta il checkbox come non selezionato
-    });
-
-    fetch('/api/canzoni')
+function loadMusicOptions(apiUrl, selectElementId) {
+    fetch(apiUrl)
         .then(response => {
             if (!response.ok) {
                 throw new Error('Network response was not ok');
@@ -56,7 +46,7 @@ window.addEventListener('load', function () {
             return response.json(); // Supponiamo che il server restituisca un JSON
         })
         .then(data => {
-            const musicSelect = document.getElementById('music'); // Ottieni il riferimento al <select>
+            const musicSelect = document.getElementById(selectElementId); // Ottieni il riferimento al <select>
             musicSelect.innerHTML = ""; // Pulisci le opzioni esistenti
 
             // Aggiungi un'opzione predefinita
@@ -81,6 +71,19 @@ window.addEventListener('load', function () {
         .catch(error => {
             console.error('C\'è stato un problema con la richiesta:', error);
         });
+}
+
+window.addEventListener('load', function () {
+    const textareas = document.querySelectorAll('textarea');
+    textareas.forEach(textarea => {
+        textarea.value = ''; // Imposta il valore a una stringa vuota
+    });
+    const checkboxes = document.querySelectorAll('input[type="checkbox"][id^="translateCheck"]');
+    checkboxes.forEach(checkbox => {
+        checkbox.checked = false; // Imposta il checkbox come non selezionato
+    });
+
+    loadMusicOptions('/api/canzoni', 'music');
 });
 
 
@@ -120,8 +123,8 @@ document.getElementById('addInput').addEventListener('click', e => {
     <div class="col-md-1 text-center d-flex flex-column align-items-center justify-content-center">
         <button class="btn btn-danger mt-3 mb-3" id="controller${inputCounter}" disabled>Play</button>
     </div>
-    <div class="row mt-1">
-        <hr style="width: 100%;">
+    <div class="row mt-1 rowLine">
+        <hr>
     </div>
 `;
 
@@ -194,37 +197,38 @@ document.addEventListener('click', async function (event) {
         const id = extractNumbers(event.target.id);
         const row = document.getElementById('formRow' + id);
         const fileName = document.getElementById('fileName' + id)?.value; // Assicurati di ottenere il valore corretto
-
         const folderPath = '_temp_' + document.getElementById('ragioneSociale_input').value; // Specifica il percorso della cartella
 
         if (row) {
             row.remove();
+            if (fileName !== '') {
+                // Controlla se l'elemento engMessageText esiste
+                const engMessageTextElement = document.getElementById('engMessageText' + id);
+                const filesToDelete = [fileName + '.mp3'];
 
-            // Controlla se l'elemento engMessageText esiste
-            const engMessageTextElement = document.getElementById('engMessageText' + id);
-            const filesToDelete = [fileName + '.mp3'];
-
-            if (engMessageTextElement) {
-                // Se l'elemento esiste, aggiungi il file ENG_${fileName}.mp3
-                filesToDelete.push('ENG_' + fileName + '.mp3');
-            }
-
-            // Invia una richiesta al server per eliminare i file
-            try {
-                const response = await fetch('/delete-audio', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ files: filesToDelete, folder: folderPath, csrfToken }),
-                });
-
-                if (!response.ok) {
-                    throw new Error('Errore durante l\'eliminazione dei file');
+                if (engMessageTextElement) {
+                    // Se l'elemento esiste, aggiungi il file ENG_${fileName}.mp3
+                    filesToDelete.push('ENG_' + fileName + '.mp3');
                 }
-                //console.log('File audio eliminati con successo.');
-            } catch (error) {
-                //console.error('Errore:', error);
+
+                // Invia una richiesta al server per eliminare i file
+                try {
+                    const response = await fetch('/delete-audio', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-Token': csrfToken
+                        },
+                        body: JSON.stringify({ files: filesToDelete, folder: folderPath, _csrf: csrfToken }),
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('Errore durante l\'eliminazione dei file');
+                    }
+                    //console.log('File audio eliminati con successo.');
+                } catch (error) {
+                    //console.error('Errore:', error);
+                }
             }
         }
     }
@@ -251,11 +255,19 @@ document.getElementById("music").addEventListener('click', function (event) {
 
 
 // Listen for the 'click' event on the 'sendQuery' button
-document.getElementById('sendQuery').addEventListener('click', e => {
+// Funzione per ottenere il token CSRF
+async function getCsrfToken() {
+    const response = await fetch('/api/csrf-token');
+    const data = await response.json();
+    return data.csrfToken;
+}
+
+document.getElementById('sendQuery').addEventListener('click', async e => {
     showLoader();
     document.getElementById('saveAll').disabled = true;
     const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
     controllers.forEach(el => el.disabled = true);
+
     // Initialize company name variable
     let companyName = "";
 
@@ -309,30 +321,30 @@ document.getElementById('sendQuery').addEventListener('click', e => {
         data
     };
 
+    // Ottieni il token CSRF
+    const csrfToken = await getCsrfToken();
+
     // Send the query object to the server using fetch
     fetch('/api/synthesize', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken // Aggiungi il token CSRF negli headers
         },
-        body: JSON.stringify({ ...query, csrfToken })
+        body: JSON.stringify({ ...query, _csrf: csrfToken }) // Aggiungi il token CSRF nel body
     })
         .then(response => {
             if (!response.ok) {
-                const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
                 controllers.forEach(el => el.disabled = true);
                 throw new Error('Network response was not ok ' + response.statusText); // Throw an error for bad responses
-
             }
             return response.json(); // Parse JSON response
         })
         .then(data => {
             //console.log(data.message); // Handle successful response
             hideLoader();
-            const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
             controllers.forEach(el => el.disabled = false);
             document.getElementById('saveAll').disabled = false;
-
         })
         .catch(error => {
             console.error('Error:', error); // Handle any errors during fetch
@@ -342,6 +354,7 @@ document.getElementById('sendQuery').addEventListener('click', e => {
             modal.show(); // Mostra il modale
         });
 });
+
 
 const audioPlayer = document.getElementById('audioPlayer');
 
@@ -432,8 +445,9 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
             },
-            body: JSON.stringify({ folderName, backgroundSong, csrfToken }), // Send data as JSON
+            body: JSON.stringify({ folderName, backgroundSong, _csrf: csrfToken }), // Send data as JSON
         });
 
         if (!response.ok) {
@@ -547,14 +561,14 @@ document.getElementById('music').addEventListener('blur', function () {
 function escapeString(str) {
     // Utilizza una regex per trovare le parti della stringa
     const parts = str.split('');
-    
+
     // Esegui l'escape solo sulle parti che non sono tra parentesi quadre
     for (let i = 0; i < parts.length; i++) {
-        if(parts[i] == '['){
-            while(parts[i] != ']'){
+        if (parts[i] == '[') {
+            while (parts[i] != ']') {
                 i++;
             }
-        }else{
+        } else {
             switch (parts[i]) {
                 case '&':
                     parts[i] = '&amp;';
@@ -581,13 +595,57 @@ function escapeString(str) {
     return parts.join('');
 }
 
-document.getElementById('copyButton1').addEventListener('click', function() {
-    const textToCopy = '<say-as interpret-as="telephone">XX</say-as>';
-    navigator.clipboard.writeText(textToCopy).then(function() {
+document.getElementById('uploadButton').addEventListener('click', function () {
+    document.getElementById('audioUpload').click();
+});
+
+
+document.getElementById('copyButton1').addEventListener('click', function () {
+    const textToCopy = '[<say-as interpret-as="telephone">XX</say-as>]';
+    navigator.clipboard.writeText(textToCopy).then(function () {
         // Chiudi il modal dopo la copia
         const modalElement = document.getElementById('infoModal');
         const modal = bootstrap.Modal.getInstance(modalElement);
         modal.hide();
-    }).catch(function(err) {
+    }).catch(function (err) {
     });
+});
+
+
+document.getElementById('audioUpload').addEventListener('change', function (event) {
+    const file = event.target.files[0];
+    if (file) {
+        const formData = new FormData();
+        formData.append('audioFile', file); // Aggiungi il file audio
+        formData.append('_csrf', csrfToken); // Aggiungi il token csrf
+        showLoader();
+        fetch('/upload', {
+            method: 'POST',
+            body: formData, // Invia il FormData con il file
+            headers: {
+                'X-CSRF-Token': csrfToken // Aggiungi il token CSRF nell'header
+            }
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json(); // Assicurati che il server restituisca JSON
+            })
+            .then(data => {
+                loadMusicOptions('/api/canzoni', 'music');
+                hideLoader();
+                // Mostra il toast
+                const toastElement = document.getElementById('successToast');
+                const toast = new bootstrap.Toast(toastElement);
+                toast.show(); // Mostra il toast
+
+            })
+            .catch((error) => {
+                document.getElementById('errorMessage').innerText = 'Errore nel caricamento del file, controlla la dimensione(max 10mb) e il tipo(mp3 o wav)';
+                let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+                hideLoader();
+                modal.show(); // Mostra il modale
+            });
+    }
 });

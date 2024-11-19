@@ -4,11 +4,13 @@ const { PollyClient, SynthesizeSpeechCommand } = require('@aws-sdk/client-polly'
 const fs = require('fs');
 const { Readable } = require('stream');
 const ID3 = require('node-id3'); //audio metadata
-
 const cron = require('node-cron');
 const { exec } = require('child_process');
+const fileUpload = require('express-fileupload');
+const multer = require('multer');
 
 const { getMp3Files } = require('./songs/songArray.js'); // Importa la funzione dal file songArray.js
+const { processMp3File } = require('./audioNormalizer.js'); // 
 
 require('dotenv').config({ path: __dirname + '/env/hidden.env' });
 
@@ -19,56 +21,98 @@ const archiver = require('archiver');
 const { doubleCsrf } = require('csrf-csrf');
 const cookieParser = require('cookie-parser');
 
+
 const app = express();
-const PORT = process.env.PORT;
 
 // Middleware per il parsing del JSON
-app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve i file statici dalla cartella 'public'
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Middleware per negare l'accesso alla directory .git
+app.use((req, res, next) => {
+    if (req.path.startsWith('/.git')) {
+        return res.status(403).send('Access Denied');
+    }
+    next();
+});
+
+
+// Middleware to handle CORS
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', 'https://ivr.up.railway.app'); // Replace with your frontend domain
+    res.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:3000'); // Replace with your frontend domain
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST'); // Specify allowed methods
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type'); // Specify allowed headers
+
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200); // Respond with 200 OK for OPTIONS requests
+    }
+
+    next(); // Pass to the next middleware
+});
+
+// Disable the X-Powered-By header
+app.disable('x-powered-by');
+
+// Set the X-Frame-Options header
+app.use((req, res, next) => {
+    res.setHeader('X-Frame-Options', 'DENY'); 
+    next();
+});
+
+// Configure Content Security Policy
+app.use((req, res, next) => {
+    res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:; frame-ancestors 'none'; form-action 'self';");
+    next();
+});
+
+
+const PORT = process.env.PORT;
+
 
 app.use(cookieParser());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
 
+/// Configurazione del middleware double-csrf
 const csrf = doubleCsrf({
     getSecret: () => process.env.CSRF_KEY,
-    getTokenFromRequest: req => req.body.csrfToken,
+    getTokenFromRequest: req => {
+        // Controlla prima nel corpo della richiesta
+        let token = req.body._csrf;
+        // Se non trovato, controlla negli headers
+        if (!token) {
+            token = req.headers['x-csrf-token'];
+        }
+        return token;
+    },
     cookieName: process.env.NODE_ENV === 'production' ? '__Host-prod.x-csrf-token' : '_csrf',
     cookieOptions: {
-      secure: process.env.NODE_ENV === 'production' // Enable for HTTPS in production
+        httpOnly: true, // Assicurati che il cookie sia solo HTTP
+        secure: process.env.NODE_ENV === 'production' // Abilita per HTTPS in produzione
     }
 });
 
+// Aggiungi il middleware double-csrf e generazione del token
 app.use(csrf.doubleCsrfProtection);
 app.use((req, res, next) => {
-  res.locals.csrfToken = csrf.generateToken(req, res);
-  next();
+    res.locals.csrfToken = csrf.generateToken(req, res);
+    next();
 });
 
-// Rotta per ottenere il token CSRF
+
+// Rotta per ottenere il token CSRF 
 app.get('/api/csrf-token', (req, res) => {
-    res.json({ csrfToken: req.csrfToken() });
+    res.json({
+        csrfToken: res.locals.csrfToken
+    });
 });
-
-
-
-
 
 // Rotta principale
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'main.html'));
 });
 
-/*
-// Rotta per gestire la richiesta POST
-app.post('/submit', (req, res) => {
-    // Verifica il token CSRF
-    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
-        return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
-    res.json({ message: 'Testo ricevuto con successo!' }); // Risposta al client
-});*/
 
 // Percorso della directory da cui leggere i file
 const directoryPath = path.join(__dirname, '/songs'); // Cambia 'filesList' con il percorso della tua directory
@@ -86,15 +130,16 @@ app.get('/api/canzoni', async (req, res) => {
 
 
 
+// Rotta per sintetizzare i messaggi
 app.post('/api/synthesize', (req, res) => {
     // Verifica il token CSRF
-    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
+    if (!req.csrfToken() || req.csrfToken() !== req.body._csrf) {
         return res.status(403).json({ error: 'Invalid CSRF token' });
     }
-    const dataArray = req.body; // Ottieni i dati inviati
-    //console.log(dataArray);
 
-    //create folder to store _temp messages
+    const dataArray = req.body; // Ottieni i dati inviati
+
+    // Crea la cartella per memorizzare i messaggi temporanei
     const folderName = '_temp_' + dataArray.companyName;
     const dirPath = path.normalize(path.join(__dirname, folderName));
 
@@ -104,26 +149,20 @@ app.post('/api/synthesize', (req, res) => {
             return res.status(500).json({ message: 'Errore durante la rimozione della cartella' });
         }
 
-        // Crea la nuova cartella
-        fs.mkdir(dirPath, { recursive: true }, (err) => {
-            if (err) {
-                console.error('Errore nella creazione della cartella:', err);
-                return res.status(500).json({ message: 'Errore nella creazione della cartella' });
-            } else {
-                console.log(`Cartella _temp_"${folderName}" creata con successo`);
-            }
-        });
-
-        const polly = new PollyClient({
-            region: 'eu-central-1',
-            credentials: {
-                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-            }
-        });
-
-        // Sintetizza i messaggi
         try {
+            // Crea la nuova cartella
+            await fs.promises.mkdir(dirPath, { recursive: true });
+            console.log(`Cartella _temp_"${folderName}" creata con successo`);
+
+            const polly = new PollyClient({
+                region: 'eu-central-1',
+                credentials: {
+                    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+                    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+                }
+            });
+
+            // Sintetizza i messaggi
             await synthesizeMessages(dataArray.data, polly, dirPath);
             res.json({ message: 'Dati ricevuti con successo e audio generato!' });
         } catch (error) {
@@ -249,12 +288,11 @@ app.get('/:folder/:filename', (req, res) => {
 
 app.post('/delete-audio', (req, res) => {
     // Verifica il token CSRF
-    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
+    if (!req.csrfToken() || req.csrfToken() !== req.body._csrf) {
         return res.status(403).json({ error: 'Invalid CSRF token' });
     }
     const { files, folder } = req.body; // Ottieni i file e la cartella
-
-    if (!files || files.length === 0 || !folder) {
+    if (!files || files.length === 0 ||  files[0] === ".mp3" || !folder) {
         return res.status(400).send('Nessun file specificato o cartella mancante.');
     }
 
@@ -505,10 +543,10 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
     // Await all promises and gather results
     try {
         const results = await Promise.all(promises);
-        
+
         // Filter out null results (for cases where there were no audio files)
         const validResults = results.filter(result => result !== null);
-        
+
         // Call saveFinal only once with the accumulated results
         for (const { TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath } of validResults) {
             await saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath);
@@ -523,7 +561,7 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
 //trim audioFile and save all files in a .zip archive, Finally download client side
 async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath) {
     const inputFilePath = path.join(resultsFolderPath, outputName);
-    
+
     // Check if the input file exists
     if (!fs.existsSync(inputFilePath)) {
         throw new Error(`Input file does not exist: ${inputFilePath}`);
@@ -531,27 +569,27 @@ async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, r
 
     let command = ffmpeg();
     const tempOutputName = `temp_${outputName}`;
-    
+
     command.input(inputFilePath);
-    
+
     if (backgroundLength && backgroundLength * backgroundRepeatTimes > TTSduration) {
         command.outputOptions('-t', TTSduration + 20); // Set trim duration
     }
-    
+
     command.mergeToFile(path.join(tempFolderPath, tempOutputName), tempFolderPath);
-    
+
     return new Promise((resolve, reject) => {
         command
             .on('end', async () => {
                 const finalOutputPath = path.join(resultsFolderPath, outputName);
                 fs.renameSync(path.join(tempFolderPath, tempOutputName), finalOutputPath);
-                
+
                 try {
                     const zipOutputPath = await zipFolder(resultsFolderPath);
-                    
+
                     // Clean up temporary folders
                     await cleanupFolders(tempFolderPath, resultsFolderPath);
-                    
+
                     resolve(zipOutputPath);
                 } catch (err) {
                     console.error('Error during zipping folder:', err);
@@ -570,7 +608,7 @@ async function cleanupFolders(tempFolderPath, resultsFolderPath) {
         await fs.promises.rm(tempFolderPath, { recursive: true, force: true });
         console.log(`Deleted temporary folder: ${tempFolderPath}`);
     }
-    
+
     if (fs.existsSync(resultsFolderPath)) {
         await fs.promises.rm(resultsFolderPath, { recursive: true, force: true });
         console.log(`Deleted results folder: ${resultsFolderPath}`);
@@ -583,9 +621,9 @@ async function cleanupFolders(tempFolderPath, resultsFolderPath) {
 async function zipFolder(folderPath) {
     const folderName = path.basename(folderPath);
     const outputZipPath = path.join(path.dirname(folderPath), `${folderName}.zip`);
-    
+
     console.log(`Attempting to zip folder: ${folderPath}`);
-    
+
     if (fs.existsSync(outputZipPath)) {
         console.log(`Deleting existing zip file: ${outputZipPath}`);
         fs.unlinkSync(outputZipPath);
@@ -608,7 +646,7 @@ async function zipFolder(folderPath) {
 
         archive.pipe(output);
         archive.directory(folderPath, false);
-        
+
         console.log('Finalizing the archive...');
         archive.finalize();
     });
@@ -732,7 +770,7 @@ async function getDuration(file) {
 
 app.post('/api/save', async (req, res) => {
     // Verifica il token CSRF
-    if (!req.csrfToken() || req.csrfToken() !== req.body.csrfToken) {
+    if (!req.csrfToken() || req.csrfToken() !== req.body._csrf) {
         return res.status(403).json({ error: 'Invalid CSRF token' });
     }
     const { folderName, backgroundSong } = req.body;
@@ -786,15 +824,95 @@ app.post('/api/save', async (req, res) => {
 });
 
 
+// Funzione per svuotare la cartella di upload
+function clearUploadDir(uploadDir) {
+    if (fs.existsSync(uploadDir)) {
+        fs.readdirSync(uploadDir).forEach(file => {
+            const filePath = path.join(uploadDir, file);
+            if (fs.statSync(filePath).isFile()) {
+                fs.unlinkSync(filePath);
+            }
+        });
+    }
+}
 
+// Funzione per controllare se il file è un audio
+const isAudioFile = (file) => {
+    const audioMimeTypes = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp3', 'audio/mp4'];
+    return audioMimeTypes.includes(file.mimetype);
+};
 
+// Funzione per sanificare il nome del file
+const sanitizeFileName = (fileName) => {
+    return path.basename(fileName).replace(/[^a-zA-Z0-9.-]/g, '_'); // Sostituisce caratteri non sicuri
+};
 
+// Configura multer per il caricamento dei file
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadDir = 'upload/';
+        clearUploadDir(uploadDir);
+        // Crea la cartella se non esiste
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir);
+        }
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const sanitizedFileName = sanitizeFileName(file.originalname);
+        cb(null, sanitizedFileName); // Usa il nome sanificato del file
+    }
+});
 
+// Limite di dimensione del file
+const maxFileSize = 10 * 1024 * 1024; // 10 MB
 
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: maxFileSize }, // Limita la dimensione del file
+    fileFilter: (req, file, cb) => {
+        if (!isAudioFile(file)) {
+            return cb(new Error('Tipo di file non supportato. Carica un file audio standard (MP3, WAV, ecc.).'));
+        }
+        const allowedExtensions = ['.mp3', '.wav'];
+        const fileExtension = path.extname(file.originalname).toLowerCase();
+        if (!allowedExtensions.includes(fileExtension)) {
+            return cb(new Error('Estensione del file non supportata. Carica un file audio standard (MP3, WAV, ecc.).'));
+        }
+        cb(null, true);
+    }
+});
 
+// Rotta per il caricamento del file
+app.post('/upload', upload.single('audioFile'), (req, res) => {
+    // Verifica che un file sia stato caricato
+    if (!req.file) {
+        return res.status(400).send('Nessun file caricato.');
+    }
 
+    console.log(`File caricato: ${req.file.originalname}`);
+    console.log(`Percorso del file: ${req.file.path}`);
 
+    console.log('File verificato correttamente, iniziando il processamento...');
 
+    // Chiama la funzione processAudioFile
+    processMp3File(req.file.path)
+        .then(outputFilePath => {
+            console.log(`File processato e salvato come: ${outputFilePath}`);
+            res.json({ message: `File ${req.file.originalname} caricato e processato con successo!`, outputFilePath });
+        })
+        .catch(error => {
+            console.error('Errore durante il processamento del file:', error);
+            res.status(500).json('Errore durante il processamento del file.');
+        });
+}, (error, req, res, next) => {
+    // Gestione degli errori di multer
+    if (error instanceof multer.MulterError) {
+        return res.status(500).json(error.message);
+    } else {
+        return res.status(500).json('Errore sconosciuto durante il caricamento del file.');
+    }
+});
 
 
 
