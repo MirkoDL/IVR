@@ -14,8 +14,10 @@
 <body>
     <input type="hidden" name="csrfToken" id="csrfToken">
     <div class="container mt-1">
-        <div class="row">
-            <h1 class="text-center border border-success">IVR</h1>
+        <div class="row justify-content-center align-items-center">
+            <div class="col-auto">
+                <h1 class="bg-success text-white rounded p-1">IVR</h1>
+            </div>
         </div>
         <div class="row mb-3 mt-3">
             <textarea class="form-control" id="ragioneSociale_input" rows="1"
@@ -23,12 +25,12 @@
         </div>
         <audio id="audioPlayer"></audio><!--audio listen-->
         <div class="row d-flex justify-content-center mt-3 mb-3 align-items-center" id="dropdownContainer">
-            <div class="col-auto text-center">
+            <div class="col-auto text-center mt-1">
                 <select id="music" class="form-select form-select-primary" aria-label="Musica">
                     <!-- Opzioni del selettore qui -->
                 </select>
             </div>
-            <div class="col-auto d-flex align-items-center">
+            <div class="col-auto d-flex align-items-center mt-1 mt-sm-none">
                 <input type="file" id="audioUpload" class="d-none" accept="audio/*" />
                 <button id="uploadButton" class="btn btn-sm btn-outline-primary">Upload</button>
             </div>
@@ -42,9 +44,23 @@
                             class="row d-flex ms-md-1 d-md-align-items-start justify-content-md-start justify-content-center">
                             <button type="button" class="btn-close custom-btn-close" id="deleteRow0"></button>
                         </div>
-                        <div class="row m-1 mt-3">
+                        <div class="row m-1 mt-2">
                             <textarea class="form-control" id="fileName0" rows="1"
                                 placeholder="Tipo(Benvenuto, Notte...)"></textarea>
+                        </div>
+                        <div class="row nameShortcut">
+                            <div class="col-2 m-1">
+                                <button type="button" id="Benvenuto_fileName0" class="btn btn-sm btn-primary">Ben.</button>
+                            </div>
+                            <div class="col-2 m-1">
+                                <button type="button" id="Notte_fileName0" class="btn btn-sm btn-primary">Not.</button>
+                            </div>
+                            <div class="col-2 m-1">
+                                <button type="button" id="Attesa_fileName0" class="btn btn-sm btn-primary">Att.</button>
+                            </div>
+                            <div class="col-2 m-1">
+                                <button type="button" id="Occupato_fileName0" class="btn btn-sm btn-primary">Occ.</button>
+                            </div>
                         </div>
                         <div class="row m-1 ">
                             <div class="form-check form-switch">
@@ -75,7 +91,7 @@
                 <button type="button" class="btn btn-primary" id="addInput">+</button>
             </div>
         </div>
-        <div class="row mt-5 text-center">
+        <div class="row mt-5 mb-2 text-center">
             <div class="col md-2 ">
                 <button id="sendQuery" type="submit" class="btn btn-primary">Genera e ascolta</button>
             </div>
