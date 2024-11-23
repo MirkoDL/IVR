@@ -92,6 +92,8 @@ let inputCounter = 1;
 
 // Add an event listener to the 'addInput' button to handle clicks
 document.getElementById('addInput').addEventListener('click', e => {
+    let windowHeight = window.innerHeight;
+    let pageHeight = document.documentElement.scrollHeight;
     // Select the main form where new input fields will be added
     const mainForm = document.getElementById('main');
     // Create a new div element for the new input row
@@ -108,6 +110,20 @@ document.getElementById('addInput').addEventListener('click', e => {
         <div class="row m-1 mt-3">
             <textarea class="form-control" id="fileName${inputCounter}" rows="1" placeholder="Tipo(Benvenuto, Notte...)"></textarea>
         </div>
+        <div class="row nameShortcut">
+            <div class="col-2 m-1">
+                <button type="button" id="Benvenuto_fileName${inputCounter}" class="btn btn-sm btn-primary">Ben.</button>
+            </div>
+            <div class="col-2 m-1">
+                <button type="button" id="Notte_fileName${inputCounter}" class="btn btn-sm btn-primary">Not.</button>
+            </div>
+            <div class="col-2 m-1">
+                <button type="button" id="Attesa_fileName${inputCounter}" class="btn btn-sm btn-primary">Att.</button>
+            </div>
+            <div class="col-2 m-1">
+                <button type="button" id="Occupato_fileName${inputCounter}" class="btn btn-sm btn-primary">Occ.</button>
+            </div>
+        </div>    
         <div class="row m-1">
             <div class="form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="translateCheck${inputCounter}" />
@@ -130,6 +146,11 @@ document.getElementById('addInput').addEventListener('click', e => {
 
     // Append the new row to the main form
     mainForm.appendChild(newRow);
+
+    //auto scroll page overflow
+    if (windowHeight < pageHeight) {
+        window.scrollBy(0, pageHeight);
+    }
 
     inputCounter++; // Increment the counter for the next input field
 });
@@ -254,7 +275,7 @@ document.getElementById("music").addEventListener('click', function (event) {
 
 
 
-// Listen for the 'click' event on the 'sendQuery' button
+
 // Funzione per ottenere il token CSRF
 async function getCsrfToken() {
     const response = await fetch('/api/csrf-token');
@@ -262,7 +283,12 @@ async function getCsrfToken() {
     return data.csrfToken;
 }
 
+// Listen for the 'click' event on the 'sendQuery' button
 document.getElementById('sendQuery').addEventListener('click', async e => {
+    if (!audioPlayer.paused) {
+        audioPlayer.pause();
+        document.getElementById(lastAudioController).innerText = "Play"
+    }
     showLoader();
     document.getElementById('saveAll').disabled = true;
     const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
@@ -357,42 +383,53 @@ document.getElementById('sendQuery').addEventListener('click', async e => {
 
 
 const audioPlayer = document.getElementById('audioPlayer');
-
+let lastAudioController = "controller0";
 container.addEventListener('click', async (e) => {
     // Check if the clicked element matches your controllers
     if (e.target.matches('[id^="ENGcontroller"], [id^="controller"]')) {
         e.preventDefault();
         const folderName = '_temp_' + document.getElementById('ragioneSociale_input').value;
         const controllerName = e.target.id;
+        if (!audioPlayer.paused && lastAudioController == controllerName) {
+            audioPlayer.pause();
+            e.target.innerText = "Play";
+        } else {
+            try {
+                //console.log(`Fetching from: /play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
 
-        try {
-            //console.log(`Fetching from: /play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
-
-            const response = await fetch(`/play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
-            if (response.ok) {
-                const data = await response.json();
-                // If audio is already playing, stop it first
-                if (!audioPlayer.paused) {
-                    audioPlayer.pause();
+                const response = await fetch(`/play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    // If audio is already playing, stop it first
+                    if (!audioPlayer.paused) {
+                        audioPlayer.pause();
+                    }
+                    // Set the new audio source and start playing
+                    audioPlayer.src = `/${folderName}/${data.audioUrl.split('/').pop()}`; // Ensure the URL is correct
+                    audioPlayer.load(); // Load the new file
+                    document.getElementById(lastAudioController).innerText = "Play"
+                    e.target.innerText = "Pausa";
+                    audioPlayer.play();
+                    lastAudioController = controllerName;
+                } else {
+                    document.getElementById('errorMessage').innerText = 'Canzone non trovata'; // Imposta il messaggio di errore
+                    let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+                    hideLoader();
+                    modal.show(); // Mostra il modale
                 }
-                // Set the new audio source and start playing
-                audioPlayer.src = `/${folderName}/${data.audioUrl.split('/').pop()}`; // Ensure the URL is correct
-                audioPlayer.load(); // Load the new file
-                audioPlayer.play();
-            } else {
-                document.getElementById('errorMessage').innerText = 'Canzone non trovata'; // Imposta il messaggio di errore
+            } catch (error) {
+                console.error('Errore durante la richiesta:', error);
+                document.getElementById('errorMessage').innerText = 'Si è verificato un errore'; // Imposta il messaggio di errore
                 let modal = new bootstrap.Modal(document.getElementById('errorModal'));
                 hideLoader();
                 modal.show(); // Mostra il modale
             }
-        } catch (error) {
-            console.error('Errore durante la richiesta:', error);
-            document.getElementById('errorMessage').innerText = 'Si è verificato un errore'; // Imposta il messaggio di errore
-            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            hideLoader();
-            modal.show(); // Mostra il modale
         }
     }
+});
+
+audioPlayer.addEventListener('ended', () => {
+    document.getElementById(lastAudioController).innerText = "Play"
 });
 
 container.addEventListener('input', e => {
@@ -428,6 +465,10 @@ document.addEventListener('change', (event) => {
 
 document.getElementById('saveAll').addEventListener('click', async (e) => {
     e.preventDefault(); // Prevenire il comportamento predefinito del pulsante (se necessario)
+    if (!audioPlayer.paused) {
+        audioPlayer.pause();
+        document.getElementById(lastAudioController).innerText = "Play"
+    }
     showLoader();
     const folderName = document.getElementById('ragioneSociale_input').value.trim();
     const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
@@ -647,5 +688,22 @@ document.getElementById('audioUpload').addEventListener('change', function (even
                 hideLoader();
                 modal.show(); // Mostra il modale
             });
+    }
+});
+
+// Seleziona l'elemento genitore che contiene gli elementi con la classe "nameShortcut"
+const parentElement = document.getElementById('main'); // Sostituisci con l'ID del tuo elemento genitore
+
+// Aggiungi l'event listener al genitore
+parentElement.addEventListener('click', e => {
+    // Controlla se il target dell'evento è un bottone all'interno di un elemento con la classe "nameShortcut"
+    if (e.target.tagName === 'BUTTON' && e.target.closest('.nameShortcut')) {
+        // Ottieni il testo del bottone cliccato
+        let buttonId = e.target.id; // ad esempio "benvenuto_fileName0"
+        let fileName = buttonId.split('_').shift();
+
+        // Estrai solo la parte "fileName0"
+        let extractedId = buttonId.split('_').pop(); // Ottiene l'ultimo elemento dell'array
+        document.getElementById(extractedId).value = fileName;
     }
 });
