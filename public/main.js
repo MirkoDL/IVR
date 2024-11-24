@@ -410,7 +410,7 @@ container.addEventListener('click', async (e) => {
                     // Set the new audio source and start playing
                     audioPlayer.src = `/${folderName}/${data.audioUrl.split('/').pop()}`; // Ensure the URL is correct
                     audioPlayer.load(); // Load the new file
-                    if(document.getElementById(lastAudioController)){
+                    if (document.getElementById(lastAudioController)) {
                         document.getElementById(lastAudioController).innerText = "Play"
                     }
                     e.target.innerText = "Pausa";
@@ -710,5 +710,72 @@ parentElement.addEventListener('click', e => {
         // Estrai solo la parte "fileName0"
         let extractedId = buttonId.split('_').pop(); // Ottiene l'ultimo elemento dell'array
         document.getElementById(extractedId).value = fileName;
+    }
+});
+
+
+function correctText(text) {
+    text = text.toLowerCase();
+    // Mapping of days of the week to their accented versions
+    const daysOfWeek = {
+        "lunedì": "lunedì",
+        "martedì": "martedì",
+        "mercoledì": "mercoledì",
+        "giovedì": "giovedì",
+        "venerdì": "venerdì",
+        "sabato": "sabato",
+        "domenica": "domenica",
+        "lunedi": "lunedì",
+        "martedi": "martedì",
+        "mercoledi": "mercoledì",
+        "giovedi": "giovedì",
+        "venerdi": "venerdì",
+        "sabato": "sabato",
+        "domenica": "domenica"
+    };
+
+    // Correct the names of the days of the week
+    text = text.replace(/\b(lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)\b/g, (match) => {
+        return daysOfWeek[match];
+    });
+
+    // Correct the time format from "1.30" or "13.30" to "1:30" or "13:30"
+    text = text.replace(/(\d{1,2})[.,](\d{2})/g, '$1:$2');
+
+    // Replace newlines with a period and a space, ensuring only one period if multiple newlines are present
+    text = text.replace(/\n+/g, '. ');
+
+    // Correct punctuation: replace multiple periods with a single period
+    text = text.replace(/\.{2,}/g, '.'); // Replace multiple periods with a single period
+    text = text.replace(/,{2,}/g, ','); // Replace multiple commas with a single comma
+
+    // Remove excess spaces
+    text = text.replace(/\s+/g, ' '); // Replace multiple spaces with a single space
+    text = text.trim(); // Remove spaces at the beginning and end of the string
+
+    // Manage spaces after punctuation
+    text = text.replace(/\s*([.,])\s*/g, '$1 '); // Remove spaces before punctuation and add a space after
+    text = text.replace(/([.,])\s+/g, '$1 '); // Ensure there is a space after punctuation
+
+    // Remove parentheses and their content
+    text = text.replace(/\s*\(.*\).*/g, ' ');
+
+    return text.trim(); // Return the corrected text
+}
+
+document.getElementById("main").addEventListener("paste", e => {
+    if (e.target.matches('textarea[id^="messageText"]')) {
+        // Controlla se il testo è già stato incollato
+        if (!e.target.dataset.pasted) {
+            // Usa setTimeout per attendere che il testo venga incollato
+            setTimeout(() => {
+                if (e.target.value !== "") {
+                    let correctedText = correctText(e.target.value);
+                    e.target.value = correctedText;
+                    // Imposta il flag per indicare che il testo è stato incollato
+                    e.target.dataset.pasted = "true";
+                }
+            }, 0);
+        }
     }
 });
