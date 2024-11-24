@@ -258,9 +258,14 @@ async function synthesizeSpeech(polly, text, languageCode, outputPath, playButto
 }
 
 app.get('/play/:folder/:controllerName', async (req, res) => {
-    //TODO add folder check for security
     const folderName = req.params.folder;
     const controllerName = req.params.controllerName;
+
+    // Controllo se il nome della cartella inizia con "_temp_"
+    
+    if (!folderName.startsWith('_temp_')) {
+        return res.status(400).send('Forbidden');
+    }
     const songsDir = path.normalize(path.join(__dirname, folderName));
     //console.log(songsDir);
     let songPath = null;
