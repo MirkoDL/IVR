@@ -371,6 +371,9 @@ document.getElementById('sendQuery').addEventListener('click', async e => {
             hideLoader();
             controllers.forEach(el => el.disabled = false);
             document.getElementById('saveAll').disabled = false;
+
+            // TODO get all txt from textarea and generate txtFile -> filename: text
+
         })
         .catch(error => {
             console.error('Error:', error); // Handle any errors during fetch
@@ -407,7 +410,9 @@ container.addEventListener('click', async (e) => {
                     // Set the new audio source and start playing
                     audioPlayer.src = `/${folderName}/${data.audioUrl.split('/').pop()}`; // Ensure the URL is correct
                     audioPlayer.load(); // Load the new file
-                    document.getElementById(lastAudioController).innerText = "Play"
+                    if(document.getElementById(lastAudioController)){
+                        document.getElementById(lastAudioController).innerText = "Play"
+                    }
                     e.target.innerText = "Pausa";
                     audioPlayer.play();
                     lastAudioController = controllerName;

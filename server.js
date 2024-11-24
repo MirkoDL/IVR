@@ -56,7 +56,7 @@ app.disable('x-powered-by');
 
 // Set the X-Frame-Options header
 app.use((req, res, next) => {
-    res.setHeader('X-Frame-Options', 'DENY'); 
+    res.setHeader('X-Frame-Options', 'DENY');
     next();
 });
 
@@ -153,6 +153,22 @@ app.post('/api/synthesize', (req, res) => {
             // Crea la nuova cartella
             await fs.promises.mkdir(dirPath, { recursive: true });
             console.log(`Cartella _temp_"${folderName}" creata con successo`);
+
+            // Crea il contenuto del file di testo
+            let fileContent = '';
+            dataArray.data.forEach(item => {
+                fileContent += `${item.fileName}:\n`;
+                fileContent += `IT -> ${item.messageText}\n`;
+                if (item.engMessageText) {
+                    fileContent += `ENG -> ${item.engMessageText}\n`;
+                }
+                fileContent += `\n`; // linea vuota
+            });
+
+            // Scrittura del file di testo
+            const transcriptionFilePath = path.join(dirPath, 'Trascrizione.txt');
+            await fs.promises.writeFile(transcriptionFilePath, fileContent);
+            console.log('File Trascrizione.txt creato/sovrascritto con successo');
 
             const polly = new PollyClient({
                 region: 'eu-central-1',
@@ -292,7 +308,7 @@ app.post('/delete-audio', (req, res) => {
         return res.status(403).json({ error: 'Invalid CSRF token' });
     }
     const { files, folder } = req.body; // Ottieni i file e la cartella
-    if (!files || files.length === 0 ||  files[0] === ".mp3" || !folder) {
+    if (!files || files.length === 0 || files[0] === ".mp3" || !folder) {
         return res.status(400).send('Nessun file specificato o cartella mancante.');
     }
 
@@ -541,24 +557,32 @@ async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
     });
 
     // Await all promises and gather results
+    // Await all promises and gather results
     try {
         const results = await Promise.all(promises);
 
         // Filter out null results (for cases where there were no audio files)
         const validResults = results.filter(result => result !== null);
 
-        // Call saveFinal only once with the accumulated results
-        for (const { TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath } of validResults) {
-            await saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath);
-        }
+        // Call saveFinal for each valid result and collect the promises
+        const saveFinalPromises = validResults.map(({ TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath }) => {
+            return saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath);
+        });
+
+        // Wait for all saveFinal calls to complete
+        await Promise.all(saveFinalPromises);
+
+        // Now call zipFolder after all saveFinal calls have finished
+        const zipOutputPath = await zipFolder(resultsFolderPath);
+
+        // Clean up temporary folders after zipping
+        await cleanupFolders(tempFolderPath, resultsFolderPath);
+
     } catch (error) {
         console.error('One or more merging processes failed:', error);
     }
 }
-
-
-
-//trim audioFile and save all files in a .zip archive, Finally download client side
+// Function to trim audioFile and save all files in a .zip archive
 async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath) {
     const inputFilePath = path.join(resultsFolderPath, outputName);
 
@@ -583,18 +607,7 @@ async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, r
             .on('end', async () => {
                 const finalOutputPath = path.join(resultsFolderPath, outputName);
                 fs.renameSync(path.join(tempFolderPath, tempOutputName), finalOutputPath);
-
-                try {
-                    const zipOutputPath = await zipFolder(resultsFolderPath);
-
-                    // Clean up temporary folders
-                    await cleanupFolders(tempFolderPath, resultsFolderPath);
-
-                    resolve(zipOutputPath);
-                } catch (err) {
-                    console.error('Error during zipping folder:', err);
-                    reject(err);
-                }
+                resolve(finalOutputPath); // Resolve with the final output path
             })
             .on('error', (err) => {
                 console.error('Error during saving final:', err);
@@ -602,6 +615,7 @@ async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, r
             });
     });
 }
+
 
 async function cleanupFolders(tempFolderPath, resultsFolderPath) {
     if (fs.existsSync(tempFolderPath)) {
@@ -779,8 +793,10 @@ app.post('/api/save', async (req, res) => {
         return res.status(400).json({ error: 'folderName is required' });
     }
 
+
     const tempFolderPath = path.join(__dirname, `_temp_${folderName}`);
     const resultsFolderPath = path.join(__dirname, 'results', folderName);
+
 
     try {
         // Verify if the temporary folder exists
@@ -791,6 +807,9 @@ app.post('/api/save', async (req, res) => {
 
         // Create the results folder
         await fs.promises.mkdir(resultsFolderPath);
+
+        //move trascrizione.txt
+        await fs.promises.rename(path.join(tempFolderPath, 'Trascrizione.txt'), path.join(resultsFolderPath, 'Trascrizione.txt'));
 
         // If backgroundSong is not null, copy the file
         if (backgroundSong) {
@@ -867,7 +886,7 @@ const storage = multer.diskStorage({
 // Limite di dimensione del file
 const maxFileSize = 10 * 1024 * 1024; // 10 MB
 
-const upload = multer({ 
+const upload = multer({
     storage: storage,
     limits: { fileSize: maxFileSize }, // Limita la dimensione del file
     fileFilter: (req, file, cb) => {

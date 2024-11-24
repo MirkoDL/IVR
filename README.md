@@ -22,9 +22,9 @@ This project provides a simple tool for creating Interactive Voice Response (IVR
 - 🔤 Auto translation
 - 🌐 Multi language support
 - ✏️ Input-text auto adjustment
-- 📀 Songs upload
+- 📀 Songs upload ✅
 - ⬇️ Download old files
-- 📝 Add transcriptions
+- 📝 Add transcriptions ✅
 
 <!--
 ## 🤝 Used By
