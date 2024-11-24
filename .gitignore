@@ -10,3 +10,4 @@ reduceAudioVolume.js
 processSongs.js
 .git/
 env/
+ecosystem.config.js
