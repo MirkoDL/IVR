@@ -301,7 +301,7 @@ document.getElementById('sendQuery').addEventListener('click', async e => {
     if (document.getElementById('ragioneSociale_input').value.length > 0) {
         companyName = document.getElementById('ragioneSociale_input').value;
     } else {
-        document.getElementById('errorMessage').innerText = 'Ragione sociale richiesta';
+        document.getElementById('errorMessage').innerText = 'Ragione sociale richiesta, compila il campo per procedere';
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
         hideLoader();
         modal.show(); // Mostra il modale
@@ -332,7 +332,7 @@ document.getElementById('sendQuery').addEventListener('click', async e => {
 
             data.push(rowData); // Add the object to the data array
         } else {
-            document.getElementById('errorMessage').innerText = 'Compila tutti i campi poi premi invio';
+            document.getElementById('errorMessage').innerText = 'Compila tutti i campi per procedere';
             let modal = new bootstrap.Modal(document.getElementById('errorModal'));
             hideLoader();
             modal.show(); // Mostra il modale
@@ -371,13 +371,10 @@ document.getElementById('sendQuery').addEventListener('click', async e => {
             hideLoader();
             controllers.forEach(el => el.disabled = false);
             document.getElementById('saveAll').disabled = false;
-
-            // TODO get all txt from textarea and generate txtFile -> filename: text
-
         })
         .catch(error => {
             console.error('Error:', error); // Handle any errors during fetch
-            document.getElementById('errorMessage').innerText = 'Si è verificato un errore, riprova'; // Imposta il messaggio di errore
+            document.getElementById('errorMessage').innerText = 'Si è verificato un errore di rete, controlla la connessione e riprova'; // Imposta il messaggio di errore
             let modal = new bootstrap.Modal(document.getElementById('errorModal'));
             hideLoader();
             modal.show(); // Mostra il modale
@@ -417,14 +414,14 @@ container.addEventListener('click', async (e) => {
                     audioPlayer.play();
                     lastAudioController = controllerName;
                 } else {
-                    document.getElementById('errorMessage').innerText = 'Canzone non trovata'; // Imposta il messaggio di errore
+                    document.getElementById('errorMessage').innerText = 'Audio non trovato, riprova o ricrealo'; // Imposta il messaggio di errore
                     let modal = new bootstrap.Modal(document.getElementById('errorModal'));
                     hideLoader();
                     modal.show(); // Mostra il modale
                 }
             } catch (error) {
                 console.error('Errore durante la richiesta:', error);
-                document.getElementById('errorMessage').innerText = 'Si è verificato un errore'; // Imposta il messaggio di errore
+                document.getElementById('errorMessage').innerText = 'Errore di rete, controlla la connessione e riprova'; // Imposta il messaggio di errore
                 let modal = new bootstrap.Modal(document.getElementById('errorModal'));
                 hideLoader();
                 modal.show(); // Mostra il modale
@@ -479,7 +476,7 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
     const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
 
     if (!folderName) {
-        document.getElementById('errorMessage').innerText = 'Genera nuovamente i messaggi per proseguire';
+        document.getElementById('errorMessage').innerText = 'Salvataggio non trovato, genera nuovamente i messaggi per proseguire';
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
         hideLoader();
         modal.show(); // Mostra il modale
@@ -521,7 +518,7 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
         
 
     } catch (error) {
-        document.getElementById('errorMessage').innerText = `Genera nuovamente i messaggi per proseguire`;
+        document.getElementById('errorMessage').innerText = `Errore di rete, controlla la connessione e/o genera nuovamente i messaggi per proseguire`;
         let modal = new bootstrap.Modal(document.getElementById('errorModal'));
         hideLoader();
         modal.show(); // Mostra il modale
@@ -693,7 +690,7 @@ document.getElementById('audioUpload').addEventListener('change', function (even
 
             })
             .catch((error) => {
-                document.getElementById('errorMessage').innerText = 'Errore nel caricamento del file, controlla la dimensione(max 10mb) e il tipo(mp3 o wav)';
+                document.getElementById('errorMessage').innerText = "Errore nel caricamento del file, controlla la dimensione(max 10mb) e/o l'estensione(mp3 o wav)";
                 let modal = new bootstrap.Modal(document.getElementById('errorModal'));
                 hideLoader();
                 modal.show(); // Mostra il modale
