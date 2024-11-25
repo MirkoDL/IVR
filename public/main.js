@@ -742,6 +742,9 @@ function correctText(text) {
     // Correct the time format from "1.30" or "13.30" to "1:30" or "13:30"
     text = text.replace(/(\d{1,2})[.,](\d{2})/g, '$1:$2');
 
+    // Remove parentheses and their content
+    text = text.replace(/\s*\([^\)]+\)/g, ' ');
+
     // Replace newlines with a period and a space, ensuring only one period if multiple newlines are present
     text = text.replace(/\n+/g, '. ');
 
@@ -756,9 +759,6 @@ function correctText(text) {
     // Manage spaces after punctuation
     text = text.replace(/\s*([.,])\s*/g, '$1 '); // Remove spaces before punctuation and add a space after
     text = text.replace(/([.,])\s+/g, '$1 '); // Ensure there is a space after punctuation
-
-    // Remove parentheses and their content
-    text = text.replace(/\s*\(.*\).*/g, ' ');
 
     return text.trim(); // Return the corrected text
 }
