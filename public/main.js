@@ -513,7 +513,12 @@ document.getElementById('saveAll').addEventListener('click', async (e) => {
         a.click(); // Programmatically click the link to trigger the download
         a.remove(); // Remove the link after downloading
         window.URL.revokeObjectURL(url); // Clean up the URL object 
-        hideLoader();
+        window.location.reload(true);
+        setTimeout(function() {
+            hideLoader();
+        }, 2000); // 2000 millisecondi equivalgono a 2 secondi
+        
+        
 
     } catch (error) {
         document.getElementById('errorMessage').innerText = `Genera nuovamente i messaggi per proseguire`;

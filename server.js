@@ -129,6 +129,31 @@ app.get('/api/canzoni', async (req, res) => {
 });
 
 
+function decodeHtmlEntities(text) {
+    const parts = text.split(/(&amp;|&lt;|&gt;|&quot;|&apos;)/);
+    for (let i = 0; i < parts.length; i++) {
+        switch (parts[i]) {
+            case '&amp;':
+                parts[i] = '&';
+                break;
+            case '&lt;':
+                parts[i] = '<';
+                break;
+            case '&gt;':
+                parts[i] = '>';
+                break;
+            case '&quot;':
+                parts[i] = '"';
+                break;
+            case '&apos;':
+                parts[i] = "'";
+                break;
+            default:
+                break;
+        }
+    }
+    return parts.join('');
+}
 
 // Rotta per sintetizzare i messaggi
 app.post('/api/synthesize', (req, res) => {
@@ -158,9 +183,9 @@ app.post('/api/synthesize', (req, res) => {
             let fileContent = '';
             dataArray.data.forEach(item => {
                 fileContent += `${item.fileName}:\n`;
-                fileContent += `IT -> ${item.messageText}\n`;
+                fileContent += `IT -> ${decodeHtmlEntities(item.messageText)}\n`;
                 if (item.engMessageText) {
-                    fileContent += `ENG -> ${item.engMessageText}\n`;
+                    fileContent += `ENG -> ${decodeHtmlEntities(item.engMessageText)}\n`;
                 }
                 fileContent += `\n`; // linea vuota
             });
@@ -262,7 +287,7 @@ app.get('/play/:folder/:controllerName', async (req, res) => {
     const controllerName = req.params.controllerName;
 
     // Controllo se il nome della cartella inizia con "_temp_"
-    
+
     if (!folderName.startsWith('_temp_')) {
         return res.status(400).send('Forbidden');
     }
