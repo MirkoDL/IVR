@@ -1,236 +1,155 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Generatore messaggi IVR con sintesi vocale" />
-    <!-- CSP via HTTP header nel server — non duplicare qui -->
-    <title>IVR — Generatore Messaggi</title>
+    <title>IVR</title>
     <link rel="icon" type="image/x-icon" href="/img/favicon.png" />
-    <link
-        href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css"
-        rel="stylesheet"
-        integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC"
-        crossorigin="anonymous"
-    />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
     <link rel="stylesheet" href="main.css" />
 </head>
 
 <body>
-
-    <!-- ── Header ─────────────────────────────────────────────────────────── -->
-    <header class="container mt-2 mb-3">
-        <div class="row justify-content-center">
+    <input type="hidden" name="csrfToken" id="csrfToken">
+    <div class="container mt-1">
+        <div class="row justify-content-center align-items-center">
             <div class="col-auto">
                 <h1 class="bg-success text-white rounded p-1">IVR</h1>
             </div>
         </div>
-    </header>
-
-    <!-- ── Contenuto principale ───────────────────────────────────────────── -->
-    <main class="container">
-
-        <!-- Ragione sociale -->
-        <div class="row mb-3">
-            <label for="ragioneSociale_input" class="visually-hidden">Ragione Sociale / Sede</label>
-            <textarea
-                class="form-control"
-                id="ragioneSociale_input"
-                rows="1"
-                placeholder="RAGIONE SOCIALE — SEDE"
-                autocomplete="organization"
-                spellcheck="false"
-            ></textarea>
+        <div class="row mb-3 mt-3">
+            <textarea class="form-control" id="ragioneSociale_input" rows="1"
+                placeholder="RAGIONE SOCIALE - SEDE"></textarea>
         </div>
-
-        <!-- Player audio nascosto -->
-        <audio id="audioPlayer" aria-hidden="true"></audio>
-
-        <!-- Selezione musica di sottofondo + upload -->
-        <div class="row justify-content-center align-items-center mb-4 g-2">
-            <div class="col-auto">
-                <label for="music" class="visually-hidden">Musica di sottofondo</label>
-                <select id="music" class="form-select" aria-label="Musica di sottofondo">
-                    <!-- Popolato da JS -->
+        <audio id="audioPlayer"></audio><!--audio listen-->
+        <div class="row d-flex justify-content-center mt-3 mb-3 align-items-center" id="dropdownContainer">
+            <div class="col-auto text-center mt-1">
+                <select id="music" class="form-select form-select-primary" aria-label="Musica">
+                    <!-- Opzioni del selettore qui -->
                 </select>
             </div>
-            <div class="col-auto">
-                <input type="file" id="audioUpload" class="d-none" accept=".mp3,.wav" />
-                <button type="button" id="uploadButton" class="btn btn-sm btn-outline-primary">
-                    Upload
-                </button>
+            <div class="col-auto d-flex align-items-center mt-1 mt-sm-none">
+                <input type="file" id="audioUpload" class="d-none" accept="audio/*" />
+                <button id="uploadButton" class="btn btn-sm btn-outline-primary">Upload</button>
             </div>
+            
         </div>
-
-        <!-- Form messaggi -->
-        <form id="main" novalidate>
-
-            <!-- Prima riga (statica, identica a quelle generate da JS) -->
-            <div class="row" id="formRow0">
-                <div class="col-md-3">
-                    <div class="row d-flex ms-md-1 justify-content-md-start justify-content-center">
-                        <button
-                            type="button"
-                            class="btn-close custom-btn-close"
-                            id="deleteRow0"
-                            aria-label="Elimina riga"
-                        ></button>
-                    </div>
-                    <div class="row m-1 mt-2">
-                        <label for="fileName0" class="visually-hidden">Tipo file</label>
-                        <textarea
-                            class="form-control"
-                            id="fileName0"
-                            rows="1"
-                            placeholder="Tipo (Benvenuto, Notte…)"
-                            spellcheck="false"
-                        ></textarea>
-                    </div>
-                    <div class="row nameShortcut" role="group" aria-label="Nomi rapidi">
-                        <div class="col-2 m-1">
-                            <button type="button" id="Benvenuto_fileName0" class="btn btn-sm btn-primary">Ben.</button>
+        <div class="row">
+            <form id="main">
+                <div class="row" id="formRow0">
+                    <div class="col-md-3">
+                        <div
+                            class="row d-flex ms-md-1 d-md-align-items-start justify-content-md-start justify-content-center">
+                            <button type="button" class="btn-close custom-btn-close" id="deleteRow0"></button>
                         </div>
-                        <div class="col-2 m-1">
-                            <button type="button" id="Notte_fileName0"     class="btn btn-sm btn-primary">Not.</button>
+                        <div class="row m-1 mt-2">
+                            <textarea class="form-control" id="fileName0" rows="1"
+                                placeholder="Tipo(Benvenuto, Notte...)"></textarea>
                         </div>
-                        <div class="col-2 m-1">
-                            <button type="button" id="Attesa_fileName0"    class="btn btn-sm btn-primary">Att.</button>
+                        <div class="row nameShortcut">
+                            <div class="col-2 m-1">
+                                <button type="button" id="Benvenuto_fileName0" class="btn btn-sm btn-primary">Ben.</button>
+                            </div>
+                            <div class="col-2 m-1">
+                                <button type="button" id="Notte_fileName0" class="btn btn-sm btn-primary">Not.</button>
+                            </div>
+                            <div class="col-2 m-1">
+                                <button type="button" id="Attesa_fileName0" class="btn btn-sm btn-primary">Att.</button>
+                            </div>
+                            <div class="col-2 m-1">
+                                <button type="button" id="Occupato_fileName0" class="btn btn-sm btn-primary">Occ.</button>
+                            </div>
                         </div>
-                        <div class="col-2 m-1">
-                            <button type="button" id="Occupato_fileName0"  class="btn btn-sm btn-primary">Occ.</button>
+                        <div class="row m-1 ">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="translateCheck0" />
+                                <label class="form-check-label" for="translateCheck0">Aggiungi traduzione</label>
+                            </div>
                         </div>
                     </div>
-                    <div class="row m-1">
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" id="translateCheck0" role="switch" />
-                            <label class="form-check-label" for="translateCheck0">Aggiungi traduzione</label>
+                    <div class="col-md-8">
+                        <div class="row">
+                            <textarea class="form-control m-1" id="messageText0" rows="5"></textarea>
                         </div>
+                    </div>
+                    <div class="col-md-1 text-center d-flex flex-column align-items-center justify-content-center">
+                        <button class="btn btn-danger mt-3 mb-3" id="controller0" disabled>
+                            Play
+                        </button>
+                    </div>
+                    <div class="row mt-1 rowLine">
+                        <hr>
                     </div>
                 </div>
-
-                <div class="col-md-8">
-                    <div class="row">
-                        <label for="messageText0" class="visually-hidden">Testo messaggio</label>
-                        <textarea class="form-control m-1" id="messageText0" rows="5"></textarea>
-                    </div>
-                </div>
-
-                <div class="col-md-1 text-center d-flex flex-column align-items-center justify-content-center">
-                    <button class="btn btn-danger mt-3 mb-3" id="controller0" disabled aria-label="Riproduci messaggio 0">
-                        Play
-                    </button>
-                </div>
-
-                <div class="row mt-1 rowLine"><hr /></div>
-            </div>
-
-        </form>
-
-        <!-- Aggiungi riga -->
-        <div class="row mt-2 mb-1">
-            <div class="col text-center">
-                <button type="button" class="btn btn-primary" id="addInput" aria-label="Aggiungi messaggio">+</button>
+            </form>
+        </div>
+        <div class="row align-items-center"></div>
+        <div class="col">
+            <div class="mt-0 text-center" id="addInputDiv">
+                <button type="button" class="btn btn-primary" id="addInput">+</button>
             </div>
         </div>
-
-        <!-- Azioni principali -->
-        <div class="row mt-5 mb-4 text-center g-2 justify-content-center">
-            <div class="col-auto">
-                <button id="sendQuery" type="button" class="btn btn-primary">
-                    Genera e ascolta
-                </button>
+        <div class="row mt-5 mb-2 text-center">
+            <div class="col md-2 ">
+                <button id="sendQuery" type="submit" class="btn btn-primary">Genera e ascolta</button>
             </div>
-            <div class="col-auto">
-                <button id="saveAll" type="button" class="btn btn-success" disabled>
-                    Salva come .zip
-                </button>
+            <div class="col md-2 ">
+                <button id="saveAll" type="submit" class="btn btn-success" disabled>Salva come .zip</button>
             </div>
         </div>
-
-    </main><!-- /main -->
-
-    <!-- ── Modale errore ──────────────────────────────────────────────────── -->
-    <div
-        class="modal fade text-center"
-        id="errorModal"
-        tabindex="-1"
-        role="dialog"
-        aria-labelledby="errorModalLabel"
-        aria-modal="true"
-    >
+    </div><!--CONTAINER-->
+    <!-- Modale di Bootstrap -->
+    <div class="modal fade text-center" id="errorModal" tabindex="-1" role="dialog" aria-labelledby="errorModalLabel"
+        aria-hidden="true">
         <div class="modal-dialog" role="document">
             <div class="modal-content">
-                <div class="modal-header justify-content-center">
+                <div class="modal-header align-self-center">
                     <h5 class="modal-title" id="errorModalLabel"><b>Errore</b></h5>
                 </div>
                 <div class="modal-body">
-                    <p id="errorMessage" role="alert"></p>
+                    <span id="errorMessage"></span>
                 </div>
-                <div class="modal-footer justify-content-center">
+                <div class="modal-footer">
                     <button type="button" class="btn btn-success" data-bs-dismiss="modal">Chiudi</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ── Modale legenda SSML ────────────────────────────────────────────── -->
-    <div
-        class="modal fade"
-        id="infoModal"
-        tabindex="-1"
-        aria-labelledby="infoModalLabel"
-        aria-modal="true"
-    >
+    <!-- LEGENDA -->
+    <button type="button" class="btn btn-info info-button" data-bs-toggle="modal" data-bs-target="#infoModal">
+        i
+    </button>
+
+    <!-- Modal -->
+    <div class="modal fade" id="infoModal" tabindex="-1" aria-labelledby="infoModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title w-100 text-center" id="infoModalLabel">Legenda Comandi</h5>
+                <div class="modal-header text-center">
+                    <h5 class="modal-title w-100" id="infoModalLabel">Legenda Comandi</h5>
                 </div>
                 <div class="modal-body">
-                    <p>
-                        <code>&lt;say-as interpret-as="telephone"&gt;XX&lt;/say-as&gt;</code>
-                        <button id="copyButton1" class="btn btn-success btn-sm ms-2" aria-label="Copia tag telefono">
-                            Copia
-                        </button>
-                    </p>
-                    <p class="mb-0">Legge il numero come un numero di telefono.</p>
+                    <b>&lt;say-as interpret-as=&quot;telephone&quot;&gt;XX&lt;/say-as&gt;</b>
+                    <button id="copyButton1" class="btn btn-success btn-sm">Copia</button>
+                    <p>Legge il numero come un telefono.</p>
                 </div>
             </div>
         </div>
     </div>
-
-    <!-- ── Toast successo upload ──────────────────────────────────────────── -->
-    <div
-        class="toast align-items-center text-white bg-success border-0 position-fixed bottom-0 end-0 m-3"
-        id="successToast"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-    >
-        <div class="d-flex">
-            <div class="toast-body">✓ File caricato con successo!</div>
-            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Chiudi"></button>
+    <div class="toast text-center border-success bg-light" id="successToast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-body">
+            File caricato con successo!
         </div>
     </div>
+    
 
-    <!-- ── Pulsante info fisso ────────────────────────────────────────────── -->
-    <button
-        type="button"
-        class="btn btn-info info-button"
-        data-bs-toggle="modal"
-        data-bs-target="#infoModal"
-        aria-label="Apri legenda comandi"
-    >i</button>
 
-    <!-- ── Script ────────────────────────────────────────────────────────── -->
-    <script
-        src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM"
-        crossorigin="anonymous"
-        defer
-    ></script>
-    <script src="main.js" defer></script>
+        crossorigin="anonymous"></script>
+    <script src="main.js"></script>
 </body>
 
 </html>
