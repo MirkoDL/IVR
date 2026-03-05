@@ -1,90 +1,41 @@
-/* ─── Variabili custom ────────────────────────────────────────────────────── */
-:root {
-    --color-danger:       #dc3545;
-    --color-danger-hover: #bb2d3b;
-    --toast-z:            1055;
-    --info-btn-z:         1050;
-}
-
-/* ─── Layout base ─────────────────────────────────────────────────────────── */
-textarea {
-    resize: none;
-}
-
-/* ─── Pulsante elimina riga (×) ───────────────────────────────────────────── */
 .custom-btn-close {
-    background-color: var(--color-danger);
-    opacity: 0.8;
-    transition: opacity 0.15s ease, background-color 0.15s ease;
+  background-color: red; /* Trasparente per il fondo */
+  opacity: 0.8;
 }
 
-.custom-btn-close:hover,
-.custom-btn-close:focus-visible {
-    background-color: var(--color-danger-hover);
-    opacity: 1;
-    outline: 2px solid var(--color-danger-hover);
-    outline-offset: 2px;
+.custom-btn-close:hover {
+  background-color: red; /* Colore di sfondo al passaggio del mouse */
+  opacity: 1;
 }
 
-/* ─── Select musica ───────────────────────────────────────────────────────── */
 #music {
-    width: 300px;
-    max-width: 100%; /* Responsive su schermi piccoli */
+  width: 300px !important;
+  overflow: auto;
 }
 
-#music option {
-    font-size: 1rem; /* Evita unità "large" non numerica */
-    color: #fff;
-    background-color: #343a40; /* Sfondo scuro per leggibilità option bianche */
+textarea {
+  resize: none;
 }
-
-/* ─── Player audio (nascosto ma accessibile agli screen reader) ───────────── */
-#audioPlayer {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
+#music > option {
+  font-size: large;
+  color: white !important;
 }
-
-/* ─── Separatore riga ─────────────────────────────────────────────────────── */
-.rowLine hr {
-    width: 100%;
-    margin: 0;
-}
-
-/* ─── Toast successo ──────────────────────────────────────────────────────── */
-/* 
-   Nota: il posizionamento fisso è già gestito via classi Bootstrap
-   nell-HTML (position-fixed bottom-0 end-0).
-   Questo blocco è mantenuto solo se vuoi il toast centrato in alto
-   invece che in basso a destra — scegli uno dei due stili.
-*/
-#successToast {
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: var(--toast-z);
-    min-width: 280px;
-}
-
-/* ─── Pulsante info fisso ─────────────────────────────────────────────────── */
 .info-button {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: var(--info-btn-z);
-    border-radius: 50%;
-    width: 2.5rem;
-    height: 2.5rem;
-    padding: 0;
-    font-weight: bold;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1050; /* Assicurati che il bottone sia sopra altri elementi */
+}
+#audioPlayer {
+  display: none;
 }
 
-.info-button:focus-visible {
-    outline: 2px solid currentColor;
-    outline-offset: 3px;
+.rowLine hr {
+  width: 100%;
+}
+#successToast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
 }
