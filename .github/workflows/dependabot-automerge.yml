@@ -10,24 +10,20 @@ permissions:
 jobs:
   dependabot-automerge:
     runs-on: ubuntu-latest
-    # Esegui solo sulle PR aperte da Dependabot
     if: github.event.pull_request.user.login == 'dependabot[bot]'
 
     steps:
-      # Recupera metadati (tipo di update: patch/minor/major, ecc.)
       - id: metadata
-        uses: dependabot/[email protected]
+        uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      # (Opzionale) approva la PR
       - name: Approve Dependabot PR
         run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Abilita auto-merge solo per patch/minor
       - name: Auto-merge Dependabot patch/minor
         if: >
           steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
