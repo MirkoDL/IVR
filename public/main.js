@@ -1,786 +1,531 @@
-let csrfToken = ''; // Variabile per memorizzare il token CSRF
+'use strict';
+
+// ─── Stato globale ─────────────────────────────────────────────────────────────
+const State = {
+    csrfToken:           '',
+    inputCounter:        1,
+    lastAudioController: 'controller0',
+    originalButtonStates: [],
+};
+
+// ─── Riferimenti DOM frequenti ────────────────────────────────────────────────
+const DOM = {
+    main:            () => document.getElementById('main'),
+    audioPlayer:     () => document.getElementById('audioPlayer'),
+    saveAll:         () => document.getElementById('saveAll'),
+    companyInput:    () => document.getElementById('ragioneSociale_input'),
+    musicSelect:     () => document.getElementById('music'),
+    errorMessage:    () => document.getElementById('errorMessage'),
+    errorModal:      () => new bootstrap.Modal(document.getElementById('errorModal')),
+};
+
+// ─── Utilità ──────────────────────────────────────────────────────────────────
+
+function showError(message) {
+    DOM.errorMessage().innerText = message;
+    DOM.errorModal().show();
+}
+
+function showLoader() {
+    document.querySelector('.container').style.opacity = '0.5';
+    const buttons = document.querySelectorAll('button');
+    State.originalButtonStates = Array.from(buttons).map(b => b.disabled);
+    buttons.forEach(b => b.disabled = true);
+}
+
+function hideLoader() {
+    document.querySelector('.container').style.opacity = '1';
+    const buttons = document.querySelectorAll('button');
+    buttons.forEach((b, i) => { b.disabled = State.originalButtonStates[i]; });
+}
+
+// Escape HTML per SSML — salta il contenuto tra parentesi quadre (tag SSML)
+function escapeForSSML(str) {
+    const MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' };
+    let result = '';
+    let i = 0;
+    while (i < str.length) {
+        if (str[i] === '[') {
+            const end = str.indexOf(']', i);
+            if (end === -1) { result += str.slice(i); break; }
+            result += str.slice(i, end + 1); // copia il blocco SSML intatto
+            i = end + 1;
+        } else {
+            result += MAP[str[i]] ?? str[i];
+            i++;
+        }
+    }
+    return result;
+}
+
+// Risolvi nomi duplicati nei fileName
+function deduplicateFileName(textarea) {
+    const current = textarea.value;
+    if (!current) return;
+
+    const others = Array.from(document.querySelectorAll('textarea[id^="fileName"]'))
+        .filter(t => t !== textarea)
+        .map(t => t.value);
+
+    let candidate = current;
+    let suffix    = 1;
+    while (others.includes(candidate)) {
+        candidate = `${current}(${suffix++})`;
+    }
+    textarea.value = candidate;
+}
+
+// Correzione automatica testo incollato
+function correctText(raw) {
+    const DAYS = {
+        lunedi: 'lunedì', martedi: 'martedì', mercoledi: 'mercoledì',
+        giovedi: 'giovedì', venerdi: 'venerdì',
+    };
+
+    return raw
+        .toLowerCase()
+        .replace(/\b(lunedi|martedi|mercoledi|giovedi|venerdi)\b/g, m => DAYS[m] ?? m)
+        .replace(/(\d{1,2})[.,](\d{2})/g, '$1:$2')   // 13.30 → 13:30
+        .replace(/\s*\([^)]+\)/g, ' ')                // rimuovi parentesi
+        .replace(/\n+/g, '. ')                         // newline → punto
+        .replace(/\.{2,}/g, '.')                       // punti multipli → uno
+        .replace(/,{2,}/g, ',')
+        .replace(/\s+/g, ' ')
+        .replace(/\s*([.,])\s*/g, '$1 ')
+        .trim();
+}
+
+// ─── CSRF ─────────────────────────────────────────────────────────────────────
 
 async function fetchCsrfToken() {
-    const response = await fetch('/api/csrf-token');
-    const data = await response.json();
-    csrfToken = data.csrfToken; // Memorizza il token CSRF
-    //console.log(csrfToken)
+    const res  = await fetch('/api/csrf-token');
+    const data = await res.json();
+    State.csrfToken = data.csrfToken;
 }
 
-// Chiama la funzione per ottenere il token CSRF all'avvio
-fetchCsrfToken();
-
-// Variabile per tenere traccia dello stato dei pulsanti
-let originalButtonStates = [];
-
-// Funzione per attivare il loader
-function showLoader() {
-    // Imposta l'opacità di .container a 0.5
-    document.querySelector('.container').style.opacity = '0.5';
-
-    // Disabilita tutti i pulsanti nella pagina
-    const buttons = document.querySelectorAll('button');
-    originalButtonStates = Array.from(buttons).map(button => button.disabled);
-    buttons.forEach(button => button.disabled = true);
+// Sempre fresco prima di ogni POST sensibile
+async function getFreshCsrfToken() {
+    await fetchCsrfToken();
+    return State.csrfToken;
 }
 
-// Funzione per disattivare il loader
-function hideLoader() {
+// ─── Fetch helper con CSRF ────────────────────────────────────────────────────
 
-    // Ripristina l'opacità di .container a 1
-    document.querySelector('.container').style.opacity = '1';
-
-    // Abilita i pulsanti precedentemente disabilitati
-    const buttons = document.querySelectorAll('button');
-    buttons.forEach((button, index) => {
-        button.disabled = originalButtonStates[index];
-    });
-}
-
-function loadMusicOptions(apiUrl, selectElementId) {
-    fetch(apiUrl)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json(); // Supponiamo che il server restituisca un JSON
-        })
-        .then(data => {
-            const musicSelect = document.getElementById(selectElementId); // Ottieni il riferimento al <select>
-            musicSelect.innerHTML = ""; // Pulisci le opzioni esistenti
-
-            // Aggiungi un'opzione predefinita
-            let defaultOption = document.createElement('option');
-            defaultOption.value = "blank";
-            defaultOption.textContent = "Nessuna canzone";
-            defaultOption.classList.add("self-align-center");
-            musicSelect.appendChild(defaultOption);
-
-            data.forEach(function (value) {
-                // Rimuovi l'estensione .mp3
-                let songName = value.replace('.mp3', '');
-                // Limita il testo a 30 caratteri
-                let displayText = songName.length > 30 ? songName.substring(0, 30).trim() + '...' : songName;
-
-                let option = document.createElement('option');
-                option.value = value; // Imposta il valore dell'opzione
-                option.textContent = displayText; // Imposta il testo visualizzato
-                musicSelect.appendChild(option); // Aggiungi l'elemento <option> al <select>
-            });
-        })
-        .catch(error => {
-            console.error('C\'è stato un problema con la richiesta:', error);
-        });
-}
-
-window.addEventListener('load', function () {
-    const textareas = document.querySelectorAll('textarea');
-    textareas.forEach(textarea => {
-        textarea.value = ''; // Imposta il valore a una stringa vuota
-    });
-    const checkboxes = document.querySelectorAll('input[type="checkbox"][id^="translateCheck"]');
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = false; // Imposta il checkbox come non selezionato
-    });
-
-    loadMusicOptions('/api/canzoni', 'music');
-});
-
-
-// Initialize a counter for dynamically added input fields
-let inputCounter = 1;
-
-// Add an event listener to the 'addInput' button to handle clicks
-document.getElementById('addInput').addEventListener('click', e => {
-    let windowHeight = window.innerHeight;
-    let pageHeight = document.documentElement.scrollHeight;
-    // Select the main form where new input fields will be added
-    const mainForm = document.getElementById('main');
-    // Create a new div element for the new input row
-    const newRow = document.createElement('div');
-    newRow.className = 'row'; // Set the class for styling
-    newRow.id = 'formRow' + inputCounter; // Set a unique ID for the new row
-
-    // Set the inner HTML of the new row with input fields and a button
-    newRow.innerHTML = `
-    <div class="col-md-3">
-        <div class="row d-flex ms-md-1 d-md-align-items-start justify-content-md-start justify-content-center">
-            <button type="button" class="btn-close custom-btn-close" id="deleteRow${inputCounter}"></button>
-        </div>
-        <div class="row m-1 mt-3">
-            <textarea class="form-control" id="fileName${inputCounter}" rows="1" placeholder="Tipo(Benvenuto, Notte...)"></textarea>
-        </div>
-        <div class="row nameShortcut">
-            <div class="col-2 m-1">
-                <button type="button" id="Benvenuto_fileName${inputCounter}" class="btn btn-sm btn-primary">Ben.</button>
-            </div>
-            <div class="col-2 m-1">
-                <button type="button" id="Notte_fileName${inputCounter}" class="btn btn-sm btn-primary">Not.</button>
-            </div>
-            <div class="col-2 m-1">
-                <button type="button" id="Attesa_fileName${inputCounter}" class="btn btn-sm btn-primary">Att.</button>
-            </div>
-            <div class="col-2 m-1">
-                <button type="button" id="Occupato_fileName${inputCounter}" class="btn btn-sm btn-primary">Occ.</button>
-            </div>
-        </div>    
-        <div class="row m-1">
-            <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="translateCheck${inputCounter}" />
-                <label class="form-check-label" for="translateCheck${inputCounter}">Aggiungi traduzione</label>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-8">
-        <div class="row">
-            <textarea class="form-control m-1" id="messageText${inputCounter}" rows="5"></textarea>
-        </div>    
-    </div>
-    <div class="col-md-1 text-center d-flex flex-column align-items-center justify-content-center">
-        <button class="btn btn-danger mt-3 mb-3" id="controller${inputCounter}" disabled>Play</button>
-    </div>
-    <div class="row mt-1 rowLine">
-        <hr>
-    </div>
-`;
-
-    // Append the new row to the main form
-    mainForm.appendChild(newRow);
-
-    //auto scroll page overflow
-    if (windowHeight < pageHeight) {
-        window.scrollBy(0, pageHeight);
-    }
-
-    inputCounter++; // Increment the counter for the next input field
-});
-
-// Select the main container for input fields
-const container = document.getElementById('main');
-
-// Add an event listener to the container to handle changes in input fields
-container.addEventListener('change', function (event) {
-    // Check if the changed element is a checkbox for translation
-    if (event.target.matches('input[type="checkbox"]') && event.target.id.startsWith('translateCheck')) {
-        if (event.target.checked) { // If the checkbox is checked
-            //console.log(event.target.id + ' è stato selezionato'); // Log selection
-            const number = event.target.id.replace('translateCheck', ''); // Extract the number from the ID
-            const existingEl = document.getElementById('messageText' + number); // Get the corresponding message textarea
-            if (existingEl) {
-                // Set the rows attributef of the textarea to 2 for translation
-                existingEl.setAttribute('rows', '2');
-                const existingRow = document.querySelector('.col-md-8 .row:has(textarea#messageText' + number + ')');
-
-                // Create a new div for the translation textarea
-                const newDiv = document.createElement('div');
-                newDiv.className = 'row';
-                newDiv.innerHTML = '<textarea class="form-control m-1" id="ENGmessageText' + number + '" rows="2"></textarea>';
-
-                // Insert the new translation textarea after the existing message textarea
-                existingRow.insertAdjacentElement('afterend', newDiv);
-            }
-
-            const newButton = document.createElement('button');
-            newButton.className = 'btn btn-danger mt-3 mb-3';
-            newButton.id = 'ENGcontroller' + number;
-            newButton.disabled = true
-            newButton.innerText = 'Play';
-            const existingButton = document.getElementById('controller' + number);
-            existingButton.parentNode.insertBefore(newButton, existingButton.nextSibling);
-
-        } else { // If the checkbox is unchecked
-            //console.log(event.target.id + ' è stato deselezionato'); // Log deselection
-            const number = event.target.id.replace('translateCheck', ''); // Extract the number
-            const existingEl = document.getElementById('messageText' + number); // Get the corresponding message textarea
-            document.getElementById('ENGcontroller' + number).remove();
-            if (existingEl) {
-                // Restore the rows attribute of the textarea to 5
-                existingEl.setAttribute('rows', '5');
-                const textarea = document.getElementById('ENGmessageText' + number); // Get the translation textarea
-                if (textarea) {
-                    const div = textarea.parentElement; // Get the parent div of the translation textarea
-                    if (div) {
-                        div.remove(); // Remove the translation textarea div
-                    }
-                }
-            }
-        }
-    }
-});
-
-document.addEventListener('click', async function (event) {
-    const extractNumbers = (str) => {
-        const match = str.match(/\d+/);
-        return match ? match[0] : null;
-    };
-
-    if (event.target.matches('[id^="deleteRow"]') && document.querySelectorAll('[id^="formRow"]').length > 1) {
-        const id = extractNumbers(event.target.id);
-        const row = document.getElementById('formRow' + id);
-        const fileName = document.getElementById('fileName' + id)?.value; // Assicurati di ottenere il valore corretto
-        const folderPath = '_temp_' + document.getElementById('ragioneSociale_input').value; // Specifica il percorso della cartella
-
-        if (row) {
-            row.remove();
-            if (fileName !== '') {
-                // Controlla se l'elemento engMessageText esiste
-                const engMessageTextElement = document.getElementById('engMessageText' + id);
-                const filesToDelete = [fileName + '.mp3'];
-
-                if (engMessageTextElement) {
-                    // Se l'elemento esiste, aggiungi il file ENG_${fileName}.mp3
-                    filesToDelete.push('ENG_' + fileName + '.mp3');
-                }
-
-                // Invia una richiesta al server per eliminare i file
-                try {
-                    const response = await fetch('/delete-audio', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRF-Token': csrfToken
-                        },
-                        body: JSON.stringify({ files: filesToDelete, folder: folderPath, _csrf: csrfToken }),
-                    });
-
-                    if (!response.ok) {
-                        throw new Error('Errore durante l\'eliminazione dei file');
-                    }
-                    //console.log('File audio eliminati con successo.');
-                } catch (error) {
-                    //console.error('Errore:', error);
-                }
-            }
-        }
-    }
-});
-
-
-
-document.getElementById("music").addEventListener('click', function (event) {
-    const dropdownItems = document.querySelectorAll('#dropdownMenu .dropdown-item');
-    dropdownItems.forEach(item => {
-        item.addEventListener('click', function (event) {
-            // Ottieni il valore completo dall'attributo 'value'
-            const selectedValue = event.target.getAttribute('value');
-
-            // Imposta il valore del bottone con il valore completo
-            document.getElementById("music").value = selectedValue;
-
-            // Aggiorna il testo del bottone
-            document.getElementById("music").textContent = event.target.textContent;;
-        });
-    });
-});
-
-
-
-
-// Funzione per ottenere il token CSRF
-async function getCsrfToken() {
-    const response = await fetch('/api/csrf-token');
-    const data = await response.json();
-    return data.csrfToken;
-}
-
-// Listen for the 'click' event on the 'sendQuery' button
-document.getElementById('sendQuery').addEventListener('click', async e => {
-    if (!audioPlayer.paused) {
-        audioPlayer.pause();
-        document.getElementById(lastAudioController).innerText = "Play"
-    }
-    showLoader();
-    document.getElementById('saveAll').disabled = true;
-    const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
-    controllers.forEach(el => el.disabled = true);
-
-    // Initialize company name variable
-    let companyName = "";
-
-    // Check if the company name input is empty
-    if (document.getElementById('ragioneSociale_input').value.length > 0) {
-        companyName = document.getElementById('ragioneSociale_input').value;
-    } else {
-        document.getElementById('errorMessage').innerText = 'Ragione sociale richiesta';
-        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-        hideLoader();
-        modal.show(); // Mostra il modale
-        return; // Stop execution if company name is not provided
-    }
-
-    // Get the song value, or null if "blank" is selected
-    let song = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
-
-    // Select all rows that start with 'formRow'
-    const rows = document.querySelectorAll('[id^="formRow"]');
-    const data = []; // Array to hold message objects
-
-    // Iterate through each row to collect data
-    rows.forEach(row => {
-        const fileName = row.querySelector('[id^="fileName"]').value.trim(); // Trim whitespace
-        const messageText = row.querySelector('[id^="messageText"]').value.trim(); // Trim whitespace
-        const engMessageText = row.querySelector('[id^="ENGmessageText"]'); // Get the English message text
-        const playButtonId = row.querySelector('[id^="controller"]').id;
-        // Check if fileName and messageText are valid before pushing to data array
-        if (fileName && messageText && (!engMessageText || engMessageText.value.trim() !== '')) {
-            const rowData = {
-                fileName: fileName,
-                messageText: escapeString(messageText),
-                engMessageText: engMessageText ? escapeString(engMessageText.value.trim()) : null, // Trim if it exists
-                playButtonId: playButtonId
-            };
-
-            data.push(rowData); // Add the object to the data array
-        } else {
-            document.getElementById('errorMessage').innerText = 'Compila tutti i campi poi premi invio';
-            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            hideLoader();
-            modal.show(); // Mostra il modale
-            throw new Error('Validation error: File name or message text is missing in a row.'); // Throw an error
-        }
-    });
-
-    // Construct the query object to send to the server
-    const query = {
-        companyName,
-        song,
-        data
-    };
-
-    // Ottieni il token CSRF
-    const csrfToken = await getCsrfToken();
-
-    // Send the query object to the server using fetch
-    fetch('/api/synthesize', {
-        method: 'POST',
+async function postJSON(url, body) {
+    const token = await getFreshCsrfToken();
+    const res   = await fetch(url, {
+        method:  'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfToken // Aggiungi il token CSRF negli headers
+            'X-CSRF-Token': token,
         },
-        body: JSON.stringify({ ...query, _csrf: csrfToken }) // Aggiungi il token CSRF nel body
-    })
-        .then(response => {
-            if (!response.ok) {
-                controllers.forEach(el => el.disabled = true);
-                throw new Error('Network response was not ok ' + response.statusText); // Throw an error for bad responses
-            }
-            return response.json(); // Parse JSON response
-        })
-        .then(data => {
-            //console.log(data.message); // Handle successful response
-            hideLoader();
-            controllers.forEach(el => el.disabled = false);
-            document.getElementById('saveAll').disabled = false;
+        body: JSON.stringify({ ...body, _csrf: token }),
+    });
+    if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `HTTP ${res.status}`);
+    }
+    return res;
+}
 
-            // TODO get all txt from textarea and generate txtFile -> filename: text
+// ─── Lista canzoni ────────────────────────────────────────────────────────────
 
-        })
-        .catch(error => {
-            console.error('Error:', error); // Handle any errors during fetch
-            document.getElementById('errorMessage').innerText = 'Si è verificato un errore, riprova'; // Imposta il messaggio di errore
-            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            hideLoader();
-            modal.show(); // Mostra il modale
+async function loadMusicOptions(apiUrl, selectId) {
+    try {
+        const res  = await fetch(apiUrl);
+        if (!res.ok) throw new Error('Errore nel caricamento canzoni');
+        const data = await res.json();
+
+        const select = document.getElementById(selectId);
+        select.innerHTML = '';
+
+        const blank = new Option('Nessuna canzone', 'blank');
+        select.appendChild(blank);
+
+        data.forEach(fileName => {
+            const label = fileName.replace(/\.mp3$/i, '');
+            const text  = label.length > 30 ? label.substring(0, 30).trim() + '…' : label;
+            select.appendChild(new Option(text, fileName));
         });
-});
+    } catch (err) {
+        console.error('[loadMusicOptions]', err);
+    }
+}
 
+// ─── Costruzione righe dinamiche ──────────────────────────────────────────────
 
-const audioPlayer = document.getElementById('audioPlayer');
-let lastAudioController = "controller0";
-container.addEventListener('click', async (e) => {
-    // Check if the clicked element matches your controllers
-    if (e.target.matches('[id^="ENGcontroller"], [id^="controller"]')) {
-        e.preventDefault();
-        const folderName = '_temp_' + document.getElementById('ragioneSociale_input').value;
-        const controllerName = e.target.id;
-        if (!audioPlayer.paused && lastAudioController == controllerName) {
-            audioPlayer.pause();
-            e.target.innerText = "Play";
-        } else {
-            try {
-                //console.log(`Fetching from: /play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
+function buildRow(id) {
+    const div = document.createElement('div');
+    div.className = 'row';
+    div.id        = `formRow${id}`;
+    div.innerHTML = `
+      <div class="col-md-3">
+        <div class="row d-flex ms-md-1 d-md-align-items-start justify-content-md-start justify-content-center">
+          <button type="button" class="btn-close custom-btn-close" id="deleteRow${id}"></button>
+        </div>
+        <div class="row m-1 mt-3">
+          <textarea class="form-control" id="fileName${id}" rows="1"
+            placeholder="Tipo (Benvenuto, Notte…)"></textarea>
+        </div>
+        <div class="row nameShortcut">
+          ${['Benvenuto','Notte','Attesa','Occupato'].map(n =>
+            `<div class="col-2 m-1">
+               <button type="button" id="${n}_fileName${id}" class="btn btn-sm btn-primary">
+                 ${n.substring(0,3)}.
+               </button>
+             </div>`
+          ).join('')}
+        </div>
+        <div class="row m-1">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="translateCheck${id}" />
+            <label class="form-check-label" for="translateCheck${id}">Aggiungi traduzione</label>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-8">
+        <div class="row">
+          <textarea class="form-control m-1" id="messageText${id}" rows="5"></textarea>
+        </div>
+      </div>
+      <div class="col-md-1 text-center d-flex flex-column align-items-center justify-content-center">
+        <button class="btn btn-danger mt-3 mb-3" id="controller${id}" disabled>Play</button>
+      </div>
+      <div class="row mt-1 rowLine"><hr></div>`;
+    return div;
+}
 
-                const response = await fetch(`/play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    // If audio is already playing, stop it first
-                    if (!audioPlayer.paused) {
-                        audioPlayer.pause();
-                    }
-                    // Set the new audio source and start playing
-                    audioPlayer.src = `/${folderName}/${data.audioUrl.split('/').pop()}`; // Ensure the URL is correct
-                    audioPlayer.load(); // Load the new file
-                    if (document.getElementById(lastAudioController)) {
-                        document.getElementById(lastAudioController).innerText = "Play"
-                    }
-                    e.target.innerText = "Pausa";
-                    audioPlayer.play();
-                    lastAudioController = controllerName;
-                } else {
-                    document.getElementById('errorMessage').innerText = 'Canzone non trovata'; // Imposta il messaggio di errore
-                    let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-                    hideLoader();
-                    modal.show(); // Mostra il modale
-                }
-            } catch (error) {
-                console.error('Errore durante la richiesta:', error);
-                document.getElementById('errorMessage').innerText = 'Si è verificato un errore'; // Imposta il messaggio di errore
-                let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-                hideLoader();
-                modal.show(); // Mostra il modale
-            }
-        }
+document.getElementById('addInput').addEventListener('click', () => {
+    const id = State.inputCounter++;
+    DOM.main().appendChild(buildRow(id));
+    // Scroll solo se la pagina ha già overflow
+    if (window.innerHeight < document.documentElement.scrollHeight) {
+        window.scrollBy(0, document.documentElement.scrollHeight);
     }
 });
 
-audioPlayer.addEventListener('ended', () => {
-    document.getElementById(lastAudioController).innerText = "Play"
+// ─── Toggle traduzione (checkbox) ─────────────────────────────────────────────
+
+DOM.main().addEventListener('change', e => {
+    if (!e.target.matches('input[type="checkbox"][id^="translateCheck"]')) return;
+
+    const num      = e.target.id.replace('translateCheck', '');
+    const msgEl    = document.getElementById(`messageText${num}`);
+    const ctrlEl   = document.getElementById(`controller${num}`);
+    const isChecked = e.target.checked;
+
+    if (isChecked) {
+        msgEl?.setAttribute('rows', '2');
+
+        // Aggiunge textarea ENG
+        const engDiv = document.createElement('div');
+        engDiv.className = 'row';
+        engDiv.innerHTML = `<textarea class="form-control m-1" id="ENGmessageText${num}" rows="2"></textarea>`;
+        msgEl?.closest('.row')?.insertAdjacentElement('afterend', engDiv);
+
+        // Aggiunge pulsante ENG Play
+        const engBtn  = document.createElement('button');
+        engBtn.className = 'btn btn-danger mt-3 mb-3';
+        engBtn.id        = `ENGcontroller${num}`;
+        engBtn.disabled  = true;
+        engBtn.innerText = 'Play';
+        ctrlEl?.insertAdjacentElement('afterend', engBtn);
+    } else {
+        msgEl?.setAttribute('rows', '5');
+        document.getElementById(`ENGmessageText${num}`)?.closest('.row')?.remove();
+        document.getElementById(`ENGcontroller${num}`)?.remove();
+    }
 });
 
-container.addEventListener('input', e => {
+// ─── Eliminazione riga + file audio dal server ────────────────────────────────
+
+DOM.main().addEventListener('click', async e => {
+    if (!e.target.matches('[id^="deleteRow"]')) return;
+    if (document.querySelectorAll('[id^="formRow"]').length <= 1) return;
+
+    const num        = e.target.id.replace('deleteRow', '');
+    const row        = document.getElementById(`formRow${num}`);
+    const fileName   = document.getElementById(`fileName${num}`)?.value?.trim();
+    const folderPath = `_temp_${DOM.companyInput().value}`;
+
+    row?.remove();
+
+    if (!fileName) return;
+
+    const filesToDelete = [`${fileName}.mp3`];
+    if (document.getElementById(`ENGmessageText${num}`)) {
+        filesToDelete.push(`ENG_${fileName}.mp3`);
+    }
+
+    try {
+        await postJSON('/delete-audio', { files: filesToDelete, folder: folderPath });
+    } catch {
+        // Eliminazione silente: la riga è già rimossa dal DOM
+    }
+});
+
+// ─── Disabilita controller su modifica testo ──────────────────────────────────
+
+DOM.main().addEventListener('input', e => {
+    const num = (e.target.id.match(/\d+/) ?? [])[0];
+    if (!num) return;
 
     if (e.target.matches('[id^="ENGmessageText"]')) {
-        let selector = e.target.id.match(/\d+/);
-        document.getElementById('ENGcontroller' + selector).disabled = true;
-
-    } if (e.target.matches('[id^="messageText"]')) {
-        let selector = e.target.id.match(/\d+/);
-        document.getElementById('controller' + selector).disabled = true;
+        const btn = document.getElementById(`ENGcontroller${num}`);
+        if (btn) btn.disabled = true;
+    } else if (e.target.matches('[id^="messageText"]')) {
+        const btn = document.getElementById(`controller${num}`);
+        if (btn) btn.disabled = true;
     }
 });
 
-document.getElementById('ragioneSociale_input').addEventListener('input', e => {
-    document.querySelectorAll('[id^="controller"], [id^="ENGcontroller"]').forEach(el => {
-        el.disabled = true; // Disabilita gli elementi
-    });
+// ─── Cambio ragione sociale → invalida tutti i controller ────────────────────
+
+DOM.companyInput().addEventListener('input', () => {
+    document.querySelectorAll('[id^="controller"], [id^="ENGcontroller"]')
+        .forEach(el => { el.disabled = true; });
 });
 
-
-document.getElementById('ragioneSociale_input').addEventListener('keypress', function (event) {
-    if (event.key === 'Enter') {
-        event.preventDefault(); // Impedisce il ritorno a capo
-    }
+DOM.companyInput().addEventListener('keypress', e => {
+    if (e.key === 'Enter') e.preventDefault();
 });
 
-// Aggiungi un event listener per ogni textarea
-document.addEventListener('change', (event) => {
-    document.getElementById('saveAll').disabled = true;
+// ─── Shortcut nome file (Ben. / Not. / Att. / Occ.) ──────────────────────────
+
+DOM.main().addEventListener('click', e => {
+    if (e.target.tagName !== 'BUTTON' || !e.target.closest('.nameShortcut')) return;
+    const [name, , targetId] = e.target.id.split('_'); // "Benvenuto_fileName3" → ["Benvenuto","fileName3"]
+    const fullId = e.target.id.split('_').slice(1).join('_'); // gestisce underscore nel nome
+    const el = document.getElementById(fullId);
+    if (el) el.value = name;
 });
 
+// ─── Deduplicazione e capitalizzazione fileName ───────────────────────────────
 
-document.getElementById('saveAll').addEventListener('click', async (e) => {
-    e.preventDefault(); // Prevenire il comportamento predefinito del pulsante (se necessario)
-    if (!audioPlayer.paused) {
-        audioPlayer.pause();
-        document.getElementById(lastAudioController).innerText = "Play"
-    }
-    showLoader();
-    const folderName = document.getElementById('ragioneSociale_input').value.trim();
-    const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
+DOM.main().addEventListener('focusout', e => {
+    if (!e.target.matches('textarea[id^="fileName"]') || !e.target.value) return;
+    e.target.value = e.target.value.charAt(0).toUpperCase() + e.target.value.slice(1);
+    deduplicateFileName(e.target);
+});
 
-    if (!folderName) {
-        document.getElementById('errorMessage').innerText = 'Genera nuovamente i messaggi per proseguire';
-        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-        hideLoader();
-        modal.show(); // Mostra il modale
+// ─── Navigazione con TAB tra textarea ────────────────────────────────────────
+
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const textareas = Array.from(document.querySelectorAll('textarea'));
+    const idx       = textareas.indexOf(document.activeElement);
+    if (idx === -1) return;
+    e.preventDefault();
+    textareas[(idx + 1) % textareas.length].focus();
+});
+
+// ─── Correzione automatica al paste ──────────────────────────────────────────
+
+DOM.main().addEventListener('paste', e => {
+    if (!e.target.matches('textarea[id^="messageText"]')) return;
+    setTimeout(() => {
+        if (e.target.value) e.target.value = correctText(e.target.value);
+    }, 0);
+});
+
+// ─── Disabilita saveAll su qualsiasi cambiamento ──────────────────────────────
+
+document.addEventListener('change', () => {
+    DOM.saveAll().disabled = true;
+});
+
+// ─── Audio player ─────────────────────────────────────────────────────────────
+
+DOM.main().addEventListener('click', async e => {
+    if (!e.target.matches('[id^="ENGcontroller"], [id^="controller"]')) return;
+    e.preventDefault();
+
+    const player       = DOM.audioPlayer();
+    const controllerName = e.target.id;
+    const folderName   = `_temp_${DOM.companyInput().value}`;
+
+    // Toggle pausa se stesso pulsante
+    if (!player.paused && State.lastAudioController === controllerName) {
+        player.pause();
+        e.target.innerText = 'Play';
         return;
     }
 
     try {
-        const response = await fetch('/api/save', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': csrfToken
-            },
-            body: JSON.stringify({ folderName, backgroundSong, _csrf: csrfToken }), // Send data as JSON
-        });
+        const res = await fetch(`/play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
+        if (!res.ok) { showError('Canzone non trovata'); return; }
 
-        if (!response.ok) {
-            const errorData = await response.text(); // Get the error response as text
-            throw new Error(errorData || 'Errore nella richiesta.'); // Handle errors
-        }
+        const { audioUrl } = await res.json();
 
-        // Create a blob from the response
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
+        if (!player.paused) player.pause();
 
-        // Create a link element
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${folderName}.zip`; // Set the file name for download
-        document.body.appendChild(a); // Append to the body
-        a.click(); // Programmatically click the link to trigger the download
-        a.remove(); // Remove the link after downloading
-        window.URL.revokeObjectURL(url); // Clean up the URL object 
-        window.location.reload(true);
-        setTimeout(function() {
+        const prevBtn = document.getElementById(State.lastAudioController);
+        if (prevBtn) prevBtn.innerText = 'Play';
+
+        player.src = `/${folderName}/${audioUrl.split('/').pop()}`;
+        player.load();
+        player.play();
+        e.target.innerText          = 'Pausa';
+        State.lastAudioController   = controllerName;
+    } catch {
+        showError('Si è verificato un errore durante la riproduzione');
+    }
+});
+
+DOM.audioPlayer().addEventListener('ended', () => {
+    const btn = document.getElementById(State.lastAudioController);
+    if (btn) btn.innerText = 'Play';
+});
+
+// ─── Sintesi vocale (sendQuery) ───────────────────────────────────────────────
+
+document.getElementById('sendQuery').addEventListener('click', async () => {
+    const player = DOM.audioPlayer();
+    if (!player.paused) {
+        player.pause();
+        const btn = document.getElementById(State.lastAudioController);
+        if (btn) btn.innerText = 'Play';
+    }
+
+    const companyName = DOM.companyInput().value.trim();
+    if (!companyName) {
+        showError('Ragione sociale richiesta');
+        return;
+    }
+
+    const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
+    showLoader();
+    DOM.saveAll().disabled = true;
+    controllers.forEach(el => el.disabled = true);
+
+    // Raccolta dati dai form row
+    const data = [];
+    for (const row of document.querySelectorAll('[id^="formRow"]')) {
+        const fileNameEl  = row.querySelector('[id^="fileName"]');
+        const msgEl       = row.querySelector('[id^="messageText"]');
+        const engMsgEl    = row.querySelector('[id^="ENGmessageText"]');
+        const ctrlEl      = row.querySelector('[id^="controller"]');
+
+        const fileName    = fileNameEl?.value.trim()  ?? '';
+        const messageText = msgEl?.value.trim()        ?? '';
+        const engText     = engMsgEl?.value.trim()     ?? '';
+
+        const isValid = fileName && messageText && (!engMsgEl || engText);
+        if (!isValid) {
+            showError('Compila tutti i campi, poi premi Invia');
             hideLoader();
-        }, 2000); // 2000 millisecondi equivalgono a 2 secondi
-        
-        
-
-    } catch (error) {
-        document.getElementById('errorMessage').innerText = `Genera nuovamente i messaggi per proseguire`;
-        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-        hideLoader();
-        modal.show(); // Mostra il modale
-    }
-});
-
-
-//no duplicate fileName
-function checkTextareaValue(event) {
-    const currentValue = event.target.value;
-    const textareas = document.querySelectorAll('textarea[id^="fileName"]');
-    let duplicateFound = false;
-    let suffix = 1;
-    let newValue = currentValue;
-
-    textareas.forEach(textarea => {
-        if (textarea !== event.target && textarea.value === currentValue) {
-            duplicateFound = true;
+            return;
         }
-    });
 
-    while (duplicateFound) {
-        newValue = `${currentValue}(${suffix})`;
-        suffix++;
-        duplicateFound = false;
-        textareas.forEach(textarea => {
-            if (textarea !== event.target && textarea.value === newValue) {
-                duplicateFound = true;
-            }
+        data.push({
+            fileName,
+            messageText:    escapeForSSML(messageText),
+            engMessageText: engMsgEl ? escapeForSSML(engText) : null,
+            playButtonId:   ctrlEl?.id ?? '',
         });
     }
 
-    event.target.value = newValue;
-}
-
-
-// Aggiungi un event listener all'elemento genitore
-container.addEventListener('focusout', function (event) {
-    if (event.target.matches('textarea[id^="fileName"]') && event.target.value != "") {
-        event.target.value = event.target.value.charAt(0).toUpperCase() + event.target.value.slice(1);
-        checkTextareaValue(event);
+    try {
+        await postJSON('/api/synthesize', { companyName, data });
+        hideLoader();
+        controllers.forEach(el => el.disabled = false);
+        DOM.saveAll().disabled = false;
+    } catch (err) {
+        console.error('[sendQuery]', err);
+        showError('Si è verificato un errore, riprova');
+        hideLoader();
     }
 });
 
+// ─── Salvataggio ZIP (saveAll) ────────────────────────────────────────────────
 
-//chage focus with TAB
-document.addEventListener('keydown', function (event) {
-    const textareas = document.querySelectorAll('textarea');
-    if (event.key === 'Tab') {
-        event.preventDefault(); // Previene il comportamento predefinito del tasto TAB
+DOM.saveAll().addEventListener('click', async e => {
+    e.preventDefault();
 
-        // Trova l'indice dell'elemento attualmente a fuoco
-        const focusedElement = document.activeElement;
-        const index = Array.prototype.indexOf.call(textareas, focusedElement);
+    const player = DOM.audioPlayer();
+    if (!player.paused) {
+        player.pause();
+        const btn = document.getElementById(State.lastAudioController);
+        if (btn) btn.innerText = 'Play';
+    }
 
-        // Calcola il prossimo indice
-        let nextIndex = (index + 1) % textareas.length; // Torna all'inizio se siamo all'ultimo
+    const folderName    = DOM.companyInput().value.trim();
+    const backgroundSong = DOM.musicSelect().value !== 'blank' ? DOM.musicSelect().value : null;
 
-        // Imposta il focus sul prossimo textarea
-        textareas[nextIndex].focus();
+    if (!folderName) {
+        showError('Genera nuovamente i messaggi per proseguire');
+        return;
+    }
+
+    showLoader();
+
+    try {
+        const res = await postJSON('/api/save', { folderName, backgroundSong });
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = Object.assign(document.createElement('a'), { href: url, download: `${folderName}.zip` });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setTimeout(() => window.location.reload(true), 2000);
+    } catch (err) {
+        console.error('[saveAll]', err);
+        showError('Genera nuovamente i messaggi per proseguire');
+        hideLoader();
     }
 });
 
+// ─── Upload canzone di sottofondo ─────────────────────────────────────────────
 
-function handleKeyDown(event) {
-    const key = event.key.toLowerCase();
-    const items = document.getElementById('dropdownMenu').getElementsByTagName('li');
-    for (let i = 0; i < items.length; i++) {
-        if (items[i].innerText.toLowerCase().startsWith(key)) {
-            ; // Imposta il focus sull'elemento corrispondente
-            document.getElementById('music').innerText = items[i].innerText;
-            document.getElementById('dropdownMenu').scrollIntoView({ behavior: "instant", block: "start" });
-            break; // Esci dal ciclo dopo aver trovato il primo elemento corrispondente
-        }
-    }
-
-}
-
-document.getElementById('music').addEventListener('focus', function () {
-    document.addEventListener('keydown', handleKeyDown);
-
-});
-
-document.getElementById('music').addEventListener('blur', function () {
-    document.removeEventListener('keydown', handleKeyDown);
-});
-
-function escapeString(str) {
-    // Utilizza una regex per trovare le parti della stringa
-    const parts = str.split('');
-
-    // Esegui l'escape solo sulle parti che non sono tra parentesi quadre
-    for (let i = 0; i < parts.length; i++) {
-        if (parts[i] == '[') {
-            while (parts[i] != ']') {
-                i++;
-            }
-        } else {
-            switch (parts[i]) {
-                case '&':
-                    parts[i] = '&amp;';
-                    break;
-                case '<':
-                    parts[i] = '&lt;';
-                    break;
-                case '>':
-                    parts[i] = '&gt;';
-                    break;
-                case '"':
-                    parts[i] = '&quot;';
-                    break;
-                case "'":
-                    parts[i] = '&apos;';
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-
-    // Riassembla la stringa
-    return parts.join('');
-}
-
-document.getElementById('uploadButton').addEventListener('click', function () {
+document.getElementById('uploadButton').addEventListener('click', () => {
     document.getElementById('audioUpload').click();
 });
 
+document.getElementById('audioUpload').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-document.getElementById('copyButton1').addEventListener('click', function () {
-    const textToCopy = '[<say-as interpret-as="telephone">XX</say-as>]';
-    navigator.clipboard.writeText(textToCopy).then(function () {
-        // Chiudi il modal dopo la copia
-        const modalElement = document.getElementById('infoModal');
-        const modal = bootstrap.Modal.getInstance(modalElement);
-        modal.hide();
-    }).catch(function (err) {
-    });
-});
+    const token    = await getFreshCsrfToken();
+    const formData = new FormData();
+    formData.append('audioFile', file);
+    formData.append('_csrf', token);
 
-
-document.getElementById('audioUpload').addEventListener('change', function (event) {
-    const file = event.target.files[0];
-    if (file) {
-        const formData = new FormData();
-        formData.append('audioFile', file); // Aggiungi il file audio
-        formData.append('_csrf', csrfToken); // Aggiungi il token csrf
-        showLoader();
-        fetch('/upload', {
-            method: 'POST',
-            body: formData, // Invia il FormData con il file
-            headers: {
-                'X-CSRF-Token': csrfToken // Aggiungi il token CSRF nell'header
-            }
-        })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                return response.json(); // Assicurati che il server restituisca JSON
-            })
-            .then(data => {
-                loadMusicOptions('/api/canzoni', 'music');
-                hideLoader();
-                // Mostra il toast
-                const toastElement = document.getElementById('successToast');
-                const toast = new bootstrap.Toast(toastElement);
-                toast.show(); // Mostra il toast
-
-            })
-            .catch((error) => {
-                document.getElementById('errorMessage').innerText = 'Errore nel caricamento del file, controlla la dimensione(max 10mb) e il tipo(mp3 o wav)';
-                let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-                hideLoader();
-                modal.show(); // Mostra il modale
-            });
+    showLoader();
+    try {
+        const res = await fetch('/upload', {
+            method:  'POST',
+            headers: { 'X-CSRF-Token': token },
+            body:    formData,
+        });
+        if (!res.ok) throw new Error();
+        await loadMusicOptions('/api/canzoni', 'music');
+        hideLoader();
+        new bootstrap.Toast(document.getElementById('successToast')).show();
+    } catch {
+        showError('Errore nel caricamento del file (max 10 MB, solo MP3/WAV)');
+        hideLoader();
     }
 });
 
-// Seleziona l'elemento genitore che contiene gli elementi con la classe "nameShortcut"
-const parentElement = document.getElementById('main'); // Sostituisci con l'ID del tuo elemento genitore
+// ─── Copia tag SSML telefono ──────────────────────────────────────────────────
 
-// Aggiungi l'event listener al genitore
-parentElement.addEventListener('click', e => {
-    // Controlla se il target dell'evento è un bottone all'interno di un elemento con la classe "nameShortcut"
-    if (e.target.tagName === 'BUTTON' && e.target.closest('.nameShortcut')) {
-        // Ottieni il testo del bottone cliccato
-        let buttonId = e.target.id; // ad esempio "benvenuto_fileName0"
-        let fileName = buttonId.split('_').shift();
-
-        // Estrai solo la parte "fileName0"
-        let extractedId = buttonId.split('_').pop(); // Ottiene l'ultimo elemento dell'array
-        document.getElementById(extractedId).value = fileName;
-    }
+document.getElementById('copyButton1').addEventListener('click', () => {
+    navigator.clipboard.writeText('[<say-as interpret-as="telephone">XX</say-as>]')
+        .then(() => {
+            const modal = bootstrap.Modal.getInstance(document.getElementById('infoModal'));
+            modal?.hide();
+        });
 });
 
+// ─── Inizializzazione al caricamento pagina ───────────────────────────────────
 
-function correctText(text) {
-    text = text.toLowerCase();
-    // Mapping of days of the week to their accented versions
-    const daysOfWeek = {
-        "lunedì": "lunedì",
-        "martedì": "martedì",
-        "mercoledì": "mercoledì",
-        "giovedì": "giovedì",
-        "venerdì": "venerdì",
-        "sabato": "sabato",
-        "domenica": "domenica",
-        "lunedi": "lunedì",
-        "martedi": "martedì",
-        "mercoledi": "mercoledì",
-        "giovedi": "giovedì",
-        "venerdi": "venerdì",
-        "sabato": "sabato",
-        "domenica": "domenica"
-    };
+window.addEventListener('load', async () => {
+    // Reset form
+    document.querySelectorAll('textarea').forEach(t => t.value = '');
+    document.querySelectorAll('input[type="checkbox"][id^="translateCheck"]')
+        .forEach(cb => { cb.checked = false; });
 
-    // Correct the names of the days of the week
-    text = text.replace(/\b(lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)\b/g, (match) => {
-        return daysOfWeek[match];
-    });
-
-    // Correct the time format from "1.30" or "13.30" to "1:30" or "13:30"
-    text = text.replace(/(\d{1,2})[.,](\d{2})/g, '$1:$2');
-
-    // Remove parentheses and their content
-    text = text.replace(/\s*\([^\)]+\)/g, ' ');
-
-    // Replace newlines with a period and a space, ensuring only one period if multiple newlines are present
-    text = text.replace(/\n+/g, '. ');
-
-    // Correct punctuation: replace multiple periods with a single period
-    text = text.replace(/\.{2,}/g, '.'); // Replace multiple periods with a single period
-    text = text.replace(/,{2,}/g, ','); // Replace multiple commas with a single comma
-
-    // Remove excess spaces
-    text = text.replace(/\s+/g, ' '); // Replace multiple spaces with a single space
-    text = text.trim(); // Remove spaces at the beginning and end of the string
-
-    // Manage spaces after punctuation
-    text = text.replace(/\s*([.,])\s*/g, '$1 '); // Remove spaces before punctuation and add a space after
-    text = text.replace(/([.,])\s+/g, '$1 '); // Ensure there is a space after punctuation
-
-    return text.trim(); // Return the corrected text
-}
-
-document.getElementById("main").addEventListener("paste", e => {
-    if (e.target.matches('textarea[id^="messageText"]')) {
-        // Controlla se il testo è già stato incollato
-        if (!e.target.dataset.pasted) {
-            // Usa setTimeout per attendere che il testo venga incollato
-            setTimeout(() => {
-                if (e.target.value !== "") {
-                    let correctedText = correctText(e.target.value);
-                    e.target.value = correctedText;
-                    // Imposta il flag per indicare che il testo è stato incollato
-                    e.target.dataset.pasted = "true";
-                }
-            }, 0);
-        }
-    }
+    await fetchCsrfToken();
+    await loadMusicOptions('/api/canzoni', 'music');
 });
