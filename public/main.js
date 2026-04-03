@@ -26,6 +26,55 @@ async function fetchCsrfToken() {
 fetchCsrfToken();
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CACHE SINTESI VOCALE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Snapshot dell'ultima sintesi riuscita.
+ * Struttura: Map<playButtonId, { fileName, messageText, engMessageText }>
+ * Usata per confrontare i valori attuali e saltare le chiamate a Polly
+ * per i messaggi che non sono cambiati dall'ultima generazione.
+ */
+const synthesisCache = new Map();
+
+/**
+ * Aggiorna la cache con i dati dell'ultima sintesi riuscita.
+ * @param {Array} data - Array di oggetti messaggio già inviati con successo a Polly
+ */
+function updateSynthesisCache(data) {
+    data.forEach(item => {
+        synthesisCache.set(item.playButtonId, {
+            fileName:       item.fileName,
+            messageText:    item.messageText,
+            engMessageText: item.engMessageText,
+        });
+    });
+}
+
+/**
+ * Invalida la cache per una specifica riga (es. quando viene eliminata).
+ * @param {string} playButtonId
+ */
+function invalidateCacheEntry(playButtonId) {
+    synthesisCache.delete(playButtonId);
+}
+
+/**
+ * Controlla se un messaggio è identico all'ultima sintesi in cache.
+ * @param {{ playButtonId: string, fileName: string, messageText: string, engMessageText: string|null }} item
+ * @returns {boolean}
+ */
+function isCached(item) {
+    const cached = synthesisCache.get(item.playButtonId);
+    if (!cached) return false;
+    return (
+        cached.fileName       === item.fileName &&
+        cached.messageText    === item.messageText &&
+        cached.engMessageText === item.engMessageText
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // UTILITY DI SICUREZZA
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -252,11 +301,15 @@ const container = document.getElementById('main');
 /**
  * Gestisce il toggle della checkbox "Aggiungi traduzione".
  * Mostra/nasconde la textarea inglese e il pulsante Play ENG.
+ * Invalida la cache per la riga modificata.
  */
 container.addEventListener('change', (event) => {
     if (!event.target.matches('input[type="checkbox"]') || !event.target.id.startsWith('translateCheck')) return;
 
     const number = event.target.id.replace('translateCheck', '');
+
+    // Invalida la cache per questa riga: il layout è cambiato
+    invalidateCacheEntry(`controller${number}`);
 
     if (event.target.checked) {
         const existingEl  = document.getElementById(`messageText${number}`);
@@ -304,6 +357,7 @@ container.addEventListener('change', (event) => {
 /**
  * Gestisce il click sul pulsante "X" per eliminare una riga.
  * Invia al server la richiesta di eliminare i file audio già generati.
+ * Invalida la voce di cache corrispondente alla riga rimossa.
  */
 document.addEventListener('click', async (event) => {
     if (!event.target.matches('[id^="deleteRow"]')) return;
@@ -316,6 +370,9 @@ document.addEventListener('click', async (event) => {
 
     if (row) {
         row.remove();
+        // Rimuove la voce di cache per questa riga
+        invalidateCacheEntry(`controller${id}`);
+
         if (fileName) {
             const filesToDelete = [`${fileName}.mp3`];
             if (document.getElementById(`ENGmessageText${id}`)) {
@@ -389,18 +446,39 @@ document.getElementById('sendQuery').addEventListener('click', async () => {
         return;
     }
 
+    // ── Filtra i messaggi già in cache (non cambiati dall'ultima sintesi) ─────
+    const dataToSynthesize = data.filter(item => !isCached(item));
+    const cachedCount      = data.length - dataToSynthesize.length;
+
+    if (cachedCount > 0) {
+        console.log(`[Cache] ${cachedCount} messaggio/i invariato/i — chiamata Polly saltata.`);
+    }
+
+    // Se tutti i messaggi sono in cache, abilita subito i controller senza
+    // chiamare il server e mostra un feedback visivo leggero.
+    if (dataToSynthesize.length === 0) {
+        console.log('[Cache] Tutti i messaggi sono invariati — nessuna chiamata a Polly.');
+        hideLoader();
+        controllers.forEach(el => { el.disabled = false; });
+        document.getElementById('saveAll').disabled = false;
+        return;
+    }
+
     try {
         const token = await fetchCsrfToken();
         const response = await fetch('/api/synthesize', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-            body:    JSON.stringify({ companyName, data, _csrf: token }),
+            body:    JSON.stringify({ companyName, data: dataToSynthesize, _csrf: token }),
         });
 
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || 'Errore del server.');
         }
+
+        // Aggiorna la cache solo con i messaggi appena sintetizzati con successo
+        updateSynthesisCache(dataToSynthesize);
 
         hideLoader();
         controllers.forEach(el => { el.disabled = false; });
@@ -491,9 +569,15 @@ container.addEventListener('input', e => {
     }
 });
 
+/**
+ * Al cambio del nome azienda invalida l'intera cache:
+ * i file sul server appartengono alla cartella _temp_<nomeAzienda>
+ * e non sono più validi per un nome diverso.
+ */
 document.getElementById('ragioneSociale_input').addEventListener('input', () => {
     document.querySelectorAll('[id^="controller"], [id^="ENGcontroller"]')
             .forEach(el => { el.disabled = true; });
+    synthesisCache.clear();
 });
 
 document.getElementById('ragioneSociale_input').addEventListener('keypress', e => {
