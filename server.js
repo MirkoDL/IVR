@@ -178,7 +178,10 @@ const synthesisLimiter = rateLimit({
 });
 
 // ─── Middleware generali ──────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    maxAge: IS_PRODUCTION ? '1d' : 0,
+    etag: true,
+}));
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json({ limit: '1mb' })); // ridotto da 10mb: i payload IVR sono piccoli
@@ -270,19 +273,21 @@ async function getAudioDuration(filePath) {
 /**
  * Calcola la durata totale di un array di file audio.
  * Aggiunge 2.5 secondi di pausa stimata tra ogni traccia.
+ * Le probe vengono eseguite in parallelo con Promise.all per ridurre
+ * il tempo complessivo proporzionalmente al numero di file.
  *
  * @param {string[]} audioPaths
  * @returns {Promise<number>}
  */
 async function getTotalDuration(audioPaths) {
-    let total = 0;
-    for (const file of audioPaths) {
-        total += 2.5;
-        const meta = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(file, (err, data) => (err ? reject(err) : resolve(data)));
-        });
-        total += meta.format.duration;
-    }
+    const durations = await Promise.all(
+        audioPaths.map(
+            filePath => new Promise((resolve, reject) => {
+                ffmpeg.ffprobe(filePath, (err, data) => (err ? reject(err) : resolve(data.format.duration)));
+            })
+        )
+    );
+    const total = durations.reduce((sum, dur) => sum + dur + 2.5, 0);
     return Math.ceil(total + 3);
 }
 
@@ -346,7 +351,13 @@ async function synthesizeSpeech(polly, ssmlText, langCode, outputPath, trackId) 
 }
 
 /**
- * Sintetizza tutti i messaggi di un IVR.
+ * Sintetizza tutti i messaggi di un IVR in parallelo.
+ *
+ * I messaggi diversi vengono processati contemporaneamente con Promise.all,
+ * riducendo il tempo totale da O(n) a O(1) rispetto al numero di messaggi.
+ * Per ciascun messaggio, IT ed ENG rimangono sequenziali (IT prima, poi ENG)
+ * poiché i file potrebbero avere lo stesso nome base e scrivere in parallelo
+ * sullo stesso path causerebbe race conditions.
  *
  * @param {Array} messages
  * @param {PollyClient} polly
@@ -354,16 +365,18 @@ async function synthesizeSpeech(polly, ssmlText, langCode, outputPath, trackId) 
  * @returns {Promise<void>}
  */
 async function synthesizeMessages(messages, polly, outputDir) {
-    for (const { fileName, messageText, engMessageText, playButtonId } of messages) {
-        const itPath  = path.join(outputDir, `${fileName}.mp3`);
-        const engPath = path.join(outputDir, `eng_${fileName}.mp3`);
+    await Promise.all(
+        messages.map(async ({ fileName, messageText, engMessageText, playButtonId }) => {
+            const itPath  = path.join(outputDir, `${fileName}.mp3`);
+            const engPath = path.join(outputDir, `eng_${fileName}.mp3`);
 
-        await synthesizeSpeech(polly, `<speak>${messageText}</speak>`,    'it-IT', itPath,  playButtonId);
+            await synthesizeSpeech(polly, `<speak>${messageText}</speak>`, 'it-IT', itPath, playButtonId);
 
-        if (engMessageText !== null) {
-            await synthesizeSpeech(polly, `<speak>${engMessageText}</speak>`, 'en-US', engPath, `ENG${playButtonId}`);
-        }
-    }
+            if (engMessageText !== null) {
+                await synthesizeSpeech(polly, `<speak>${engMessageText}</speak>`, 'en-US', engPath, `ENG${playButtonId}`);
+            }
+        })
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -538,26 +551,27 @@ async function copyBackgroundSong(src, dest) {
 
 /**
  * Raggruppa i file nella cartella temporanea in oggetti da processare.
+ * La lista dei file di resultsDir viene letta una sola volta e riutilizzata
+ * per tutte le iterazioni, evitando chiamate readdirSync ripetute nel loop.
  *
  * @param {string} tempDir
  * @param {string} resultsDir
  * @returns {Array}
  */
 function categorizeFiles(tempDir, resultsDir) {
-    const files     = fs.readdirSync(tempDir);
-    const result    = [];
-    const processed = new Set();
+    const files          = fs.readdirSync(tempDir);
+    const resultsDirFiles = fs.readdirSync(resultsDir); // letto una sola volta
+    const bgFile         = resultsDirFiles.find(f => f.endsWith('.mp3')) || null;
+    const result         = [];
+    const processed      = new Set();
 
     for (const file of files) {
         if (file.startsWith('eng_') || processed.has(file)) continue;
 
         const engFile = `eng_${file}`;
-        const fileObj = { files: [file], outputName: file, backgroundSong: null };
+        const fileObj = { files: [file], outputName: file, backgroundSong: bgFile };
 
         if (files.includes(engFile)) fileObj.files.push(engFile);
-
-        const bgFile = fs.readdirSync(resultsDir).find(f => f.endsWith('.mp3'));
-        if (bgFile) fileObj.backgroundSong = bgFile;
 
         result.push(fileObj);
         processed.add(file);
@@ -573,8 +587,7 @@ function categorizeFiles(tempDir, resultsDir) {
         if (existing) {
             existing.files.push(file);
         } else {
-            const bgFile = fs.readdirSync(resultsDir).find(f => f.endsWith('.mp3'));
-            result.push({ files: [file], outputName: originalFile, backgroundSong: bgFile || null });
+            result.push({ files: [file], outputName: originalFile, backgroundSong: bgFile });
         }
         processed.add(file);
     }
@@ -682,14 +695,22 @@ const ALLOWED_AUDIO_EXT  = new Set(['.mp3', '.wav']);
 
 /**
  * Svuota la directory di upload prima di ogni nuovo caricamento.
+ * Usa l'API async di fs per non bloccare l'event loop.
  *
  * @param {string} dir
+ * @returns {Promise<void>}
  */
-function clearUploadDir(dir) {
-    if (!fs.existsSync(dir)) return;
-    fs.readdirSync(dir)
-        .filter(f => fs.statSync(path.join(dir, f)).isFile())
-        .forEach(f => fs.unlinkSync(path.join(dir, f)));
+async function clearUploadDir(dir) {
+    try {
+        const files = await fs.promises.readdir(dir);
+        await Promise.all(
+            files
+                .filter(async f => (await fs.promises.stat(path.join(dir, f))).isFile())
+                .map(f => fs.promises.unlink(path.join(dir, f)))
+        );
+    } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+    }
 }
 
 /**
@@ -705,10 +726,14 @@ function sanitizeFileName(fileName) {
 /** Configurazione di Multer per il caricamento di file audio */
 const upload = multer({
     storage: multer.diskStorage({
-        destination: (req, file, cb) => {
-            clearUploadDir(UPLOAD_DIR);
-            if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-            cb(null, UPLOAD_DIR);
+        destination: async (req, file, cb) => {
+            try {
+                await clearUploadDir(UPLOAD_DIR);
+                if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+                cb(null, UPLOAD_DIR);
+            } catch (err) {
+                cb(err);
+            }
         },
         filename: (req, file, cb) => cb(null, sanitizeFileName(file.originalname)),
     }),
