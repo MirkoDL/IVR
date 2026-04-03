@@ -1,78 +1,170 @@
-const fs = require('fs');
-const path = require('path');
+'use strict';
+
+/**
+ * audioNormalizer.js
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Modulo per la normalizzazione del volume dei file audio caricati dall'utente.
+ *
+ * Il flusso di lavoro è:
+ *   1. Legge i campioni PCM grezzi del file sorgente tramite ffmpeg
+ *   2. Calcola il volume RMS (Root Mean Square) in decibel
+ *   3. Calcola il guadagno necessario per raggiungere TARGET_VOLUME_DB
+ *   4. Applica il guadagno, converte in mono e riduce a 8000 Hz / 56 kbps
+ *      (qualità telefonica standard per IVR)
+ *   5. Salva il risultato nella directory songs/ con nome sanitizzato
+ *   6. Elimina il file temporaneo di upload
+ */
+
+const fs     = require('fs');
+const path   = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 
-const normalizedDirectory = 'songs/'; // Cartella per i file audio normalizzati
-const targetVolumeDB = 50; // Volume target in dB
+// ─── Costanti ─────────────────────────────────────────────────────────────────
 
-function calculateVolumeInDB(channelData) {
-    const rms = Math.sqrt(channelData.reduce((sum, value) => sum + value * value, 0) / channelData.length);
-    const db = 20 * Math.log10(rms);
-    return db;
+/** Directory dove vengono salvati i file normalizzati */
+const OUTPUT_DIR = path.resolve('songs');
+
+/** Volume target in dB per i file di sottofondo IVR */
+const TARGET_VOLUME_DB = 50;
+
+/** Lunghezza massima del nome file (senza estensione) */
+const MAX_FILENAME_LENGTH = 50;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// UTILITY
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Calcola il volume RMS (Root Mean Square) di un segnale audio in decibel.
+ * Il valore viene ricavato dai campioni PCM grezzi a 16 bit.
+ *
+ * Formula: dB = 20 × log₁₀(RMS)
+ * Dove RMS = √(Σ(s²) / N)
+ *
+ * @param {Int16Array} samples - Array di campioni PCM a 16 bit
+ * @returns {number} Volume in dB (valore negativo = segnale debole)
+ */
+function calculateVolumeDB(samples) {
+    const sumSquares = samples.reduce((acc, s) => acc + s * s, 0);
+    const rms        = Math.sqrt(sumSquares / samples.length);
+    return 20 * Math.log10(rms);
 }
 
-function calculateGain(currentVolumeDB) {
-    return targetVolumeDB - currentVolumeDB; // Calcola il guadagno necessario
+/**
+ * Calcola il guadagno (in dB) necessario per portare il volume corrente
+ * al volume target definito da TARGET_VOLUME_DB.
+ *
+ * @param {number} currentDB - Volume corrente in dB
+ * @returns {number} Guadagno da applicare in dB
+ */
+function calculateGain(currentDB) {
+    return TARGET_VOLUME_DB - currentDB;
 }
 
-function processMp3File(filePath) {
-    console.log('Processing file before upload..')
+/**
+ * Legge i campioni PCM grezzi di un file audio tramite ffmpeg.
+ * Il file viene decodificato come PCM signed 16-bit little-endian (s16le).
+ *
+ * @param {string} filePath - Percorso del file audio sorgente
+ * @returns {Promise<Int16Array>} Array di campioni PCM
+ */
+function readPcmSamples(filePath) {
     return new Promise((resolve, reject) => {
-        const command = ffmpeg(filePath)
-            .audioCodec('pcm_s16le') // Imposta il codec audio su PCM per la lettura
-            .format('s16le') // Imposta il formato su PCM a 16 bit
-            .on('error', (err) => {
-                console.error(`Errore durante la conversione di ${filePath}:`, err);
-                reject(err);
-            });
+        const chunks = [];
 
-        // Crea un flusso di dati per il file WAV
-        const audioData = [];
-        command.pipe()
-            .on('data', (chunk) => {
-                audioData.push(chunk);
-            })
+        ffmpeg(filePath)
+            .audioCodec('pcm_s16le')
+            .format('s16le')
+            .on('error', reject)
+            .pipe()
+            .on('data',  (chunk) => chunks.push(chunk))
+            .on('error', reject)
             .on('end', () => {
-                const buffer = Buffer.concat(audioData);
-                const channelData = new Int16Array(buffer.buffer); // Crea un array di Int16 dal buffer
-                const currentVolumeDB = calculateVolumeInDB(channelData);
-                const gain = calculateGain(currentVolumeDB);
-                console.log(`Volume attuale per ${filePath}: ${currentVolumeDB.toFixed(2)} dB, Guadagno necessario: ${gain.toFixed(2)} dB`);
-
-                // Applica il guadagno e salva il file audio modificato
-                // Crea il nome del file di output
-                let baseName = path.basename(filePath, path.extname(filePath));
-                baseName = baseName.length > 50 ? baseName.substring(0, 50) : baseName; // Limita a 50 caratteri
-                let outputFilePath = path.join(normalizedDirectory, `${baseName}.mp3`);
-                // Gestisci conflitti di nomi
-                let counter = 1;
-                while (fs.existsSync(outputFilePath)) {
-                    outputFilePath = path.join(normalizedDirectory, `${baseName}(${counter}).mp3`);
-                    counter++;
-                }
-                ffmpeg(filePath)
-                    .audioFilters(`volume=${gain}dB,pan=mono|c0=0.5*c0+0.5*c1`) // Applica il guadagno e converte in mono
-                    .audioCodec('libmp3lame') // Imposta il codec audio su libmp3lame per l'output MP3
-                    .audioBitrate('56k') // Imposta il bitrate a 56 kbps
-                    .audioFrequency(8000) // Imposta la frequenza a 8000 Hz
-                    .save(outputFilePath)
-                    .on('end', () => {
-                        // Rimuovi il file originale
-                        fs.unlink(filePath, (err) => {
-                            if (err) {
-                                console.error(`Errore durante la rimozione di ${filePath}:`, err);
-                                reject(err);
-                            } else {
-                                resolve(outputFilePath);
-                            }
-                        });
-                    })
-                    .on('error', (err) => {
-                        console.error(`Errore durante il salvataggio di ${outputFilePath}:`, err);
-                        reject(err);
-                    });
+                const buffer  = Buffer.concat(chunks);
+                // Interpreta il buffer come array di interi a 16 bit con segno
+                const samples = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 2);
+                resolve(samples);
             });
     });
 }
 
+/**
+ * Genera un percorso di output univoco nella directory songs/.
+ * Se esiste già un file con lo stesso nome, aggiunge un suffisso numerico
+ * (es. "canzone(1).mp3", "canzone(2).mp3", ...).
+ *
+ * @param {string} baseName - Nome base del file (senza estensione)
+ * @returns {string} Percorso di output univoco
+ */
+function resolveOutputPath(baseName) {
+    // Tronca il nome se supera il limite
+    const safeName = baseName.length > MAX_FILENAME_LENGTH
+        ? baseName.substring(0, MAX_FILENAME_LENGTH)
+        : baseName;
+
+    let outputPath = path.join(OUTPUT_DIR, `${safeName}.mp3`);
+    let counter    = 1;
+
+    while (fs.existsSync(outputPath)) {
+        outputPath = path.join(OUTPUT_DIR, `${safeName}(${counter}).mp3`);
+        counter++;
+    }
+
+    return outputPath;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// FUNZIONE PRINCIPALE
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Normalizza un file MP3/WAV caricato dall'utente e lo salva in songs/.
+ *
+ * Processo:
+ *   1. Legge i campioni PCM grezzi per calcolare il volume attuale
+ *   2. Calcola il guadagno correttivo
+ *   3. Applica il guadagno + converte in mono + riduce la qualità (IVR)
+ *   4. Salva nella directory songs/ con nome univoco
+ *   5. Elimina il file originale dall'upload temporaneo
+ *
+ * Le impostazioni di output (8000 Hz, mono, 56 kbps) sono ottimizzate
+ * per sistemi IVR telefonici, dove la banda è limitata.
+ *
+ * @param {string} filePath - Percorso assoluto del file da processare
+ * @returns {Promise<string>} Percorso del file normalizzato salvato
+ */
+async function processMp3File(filePath) {
+    console.log(`[Normalizer] Analisi del file: ${path.basename(filePath)}`);
+
+    // Step 1: leggi i campioni PCM per misurare il volume
+    const samples   = await readPcmSamples(filePath);
+    const currentDB = calculateVolumeDB(samples);
+    const gain      = calculateGain(currentDB);
+
+    console.log(`[Normalizer] Volume rilevato: ${currentDB.toFixed(2)} dB → Guadagno applicato: ${gain.toFixed(2)} dB`);
+
+    // Step 2: determina il percorso di output univoco
+    const baseName   = path.basename(filePath, path.extname(filePath));
+    const outputPath = resolveOutputPath(baseName);
+
+    // Step 3: applica guadagno, converte in mono e salva come MP3 per IVR
+    await new Promise((resolve, reject) => {
+        ffmpeg(filePath)
+            .audioFilters(`volume=${gain}dB,pan=mono|c0=0.5*c0+0.5*c1`) // gain + downmix stereo→mono
+            .audioCodec('libmp3lame')   // encoder MP3
+            .audioBitrate('56k')        // bitrate telefonico
+            .audioFrequency(8000)       // frequenza di campionamento IVR standard
+            .save(outputPath)
+            .on('end',   resolve)
+            .on('error', reject);
+    });
+
+    // Step 4: elimina il file originale dopo la conversione
+    await fs.promises.unlink(filePath);
+
+    console.log(`[Normalizer] File salvato: ${outputPath}`);
+    return outputPath;
+}
+
+// ─── Esportazioni ─────────────────────────────────────────────────────────────
 module.exports = { processMp3File };
