@@ -65,6 +65,17 @@ const HTML_ENTITIES = {
 
 const app = express();
 
+// ─── Trust proxy: necessario su Render (e ambienti con reverse proxy) ─────────
+/**
+ * Imposta il numero di hop del proxy da cui ci si fida.
+ * Su Render il traffico passa attraverso un singolo reverse proxy,
+ * quindi il valore 1 è sufficiente e sicuro: Express leggerà l'IP reale
+ * dall'ultimo elemento di X-Forwarded-For, prevenendo IP spoofing.
+ * Senza questa impostazione express-rate-limit lancia
+ * ERR_ERL_UNEXPECTED_X_FORWARDED_FOR e non funziona correttamente.
+ */
+app.set('trust proxy', 1);
+
 // ─── Helmet: imposta sicuri la maggior parte degli header HTTP ────────────────
 /**
  * Helmet configura automaticamente header di sicurezza come:
