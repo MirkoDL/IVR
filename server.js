@@ -109,7 +109,12 @@ app.use((_req, res, next) => {
 /**
  * CSP restrittiva:
  * - Solo risorse da 'self' e jsdelivr.net
- * - Vieta inline script/style (sicurezza XSS)
+ * - Vieta inline script (sicurezza XSS)
+ * - 'unsafe-inline' in style-src è necessario perché Bootstrap 5 JS inietta
+ *   stili inline dinamici sul <body> quando apre modal/offcanvas
+ *   (es. overflow:hidden; padding-right:Xpx dove X dipende dalla scrollbar
+ *   del browser e non è predicibile a compile-time). Non è possibile usare
+ *   hash statici né nonce per questi stili generati a runtime da Bootstrap.
  * - Vieta frame e form verso origini esterne
  */
 app.use((_req, res, next) => {
@@ -118,7 +123,7 @@ app.use((_req, res, next) => {
         [
             "default-src 'self'",
             "script-src 'self' https://cdn.jsdelivr.net",
-            "style-src 'self' https://cdn.jsdelivr.net",
+            "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
             "img-src 'self' data:",
             "media-src 'self'",
             "frame-ancestors 'none'",
