@@ -116,6 +116,8 @@ app.use((_req, res, next) => {
  *   del browser e non è predicibile a compile-time). Non è possibile usare
  *   hash statici né nonce per questi stili generati a runtime da Bootstrap.
  * - Vieta frame e form verso origini esterne
+ * - media-src include blob: per consentire URL.createObjectURL() sull'elemento
+ *   <audio> (necessario per la riproduzione degli MP3 sintetizzati da Polly)
  */
 app.use((_req, res, next) => {
     res.setHeader(
@@ -125,7 +127,7 @@ app.use((_req, res, next) => {
             "script-src 'self' https://cdn.jsdelivr.net",
             "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
             "img-src 'self' data:",
-            "media-src 'self'",
+            "media-src 'self' blob:",
             "frame-ancestors 'none'",
             "form-action 'self'",
             "base-uri 'self'",
