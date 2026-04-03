@@ -81,21 +81,23 @@ function escapeXmlPreserveSSML(str) {
 let originalButtonStates = [];
 
 /**
- * Attiva il loader: riduce l'opacità e disabilita tutti i pulsanti.
- * Previene doppie sottomissioni durante elaborazioni in corso.
+ * Attiva il loader: aggiunge la classe CSS .container--loading e disabilita
+ * tutti i pulsanti. Evita di impostare style.opacity direttamente per
+ * rispettare la Content Security Policy (no unsafe-inline).
  */
 function showLoader() {
-    document.querySelector('.container').style.opacity = '0.5';
+    document.querySelector('.container').classList.add('container--loading');
     const buttons = document.querySelectorAll('button');
     originalButtonStates = Array.from(buttons).map(btn => btn.disabled);
     buttons.forEach(btn => { btn.disabled = true; });
 }
 
 /**
- * Disattiva il loader: ripristina opacità e stato dei pulsanti.
+ * Disattiva il loader: rimuove la classe CSS .container--loading e ripristina
+ * lo stato dei pulsanti.
  */
 function hideLoader() {
-    document.querySelector('.container').style.opacity = '1';
+    document.querySelector('.container').classList.remove('container--loading');
     document.querySelectorAll('button').forEach((btn, i) => {
         btn.disabled = originalButtonStates[i] ?? false;
     });

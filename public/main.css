@@ -40,5 +40,9 @@ textarea {
   transform: translateX(-50%);
 }
 
-
-
+/* Loader state: riduce l'opacità del container durante le elaborazioni.
+   Usato via classList invece di style.opacity per rispettare la CSP
+   che vieta gli inline style impostati da JavaScript. */
+.container--loading {
+  opacity: 0.5;
+}
