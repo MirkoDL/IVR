@@ -1,783 +1,748 @@
-let csrfToken = ''; // Variabile per memorizzare il token CSRF
+'use strict';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CSRF TOKEN
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Token CSRF aggiornato prima di ogni richiesta POST */
+let csrfToken = '';
+
+/**
+ * Recupera un token CSRF fresco dal server.
+ * Deve essere chiamata prima di ogni richiesta POST per garantire
+ * che il token sia sempre valido (non scaduto).
+ *
+ * @returns {Promise<string>} Il token CSRF
+ */
 async function fetchCsrfToken() {
     const response = await fetch('/api/csrf-token');
+    if (!response.ok) throw new Error('Impossibile recuperare il token CSRF.');
     const data = await response.json();
-    csrfToken = data.csrfToken; // Memorizza il token CSRF
-    //console.log(csrfToken)
+    csrfToken = data.csrfToken;
+    return csrfToken;
 }
 
-// Chiama la funzione per ottenere il token CSRF all'avvio
+// Carica il token all'avvio della pagina
 fetchCsrfToken();
 
-// Variabile per tenere traccia dello stato dei pulsanti
+// ─────────────────────────────────────────────────────────────────────────────
+// UTILITY DI SICUREZZA
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Esegue l'escape dei caratteri HTML speciali in una stringa.
+ * IMPORTANTE: usare sempre questa funzione prima di inserire
+ * contenuto utente nel DOM tramite innerHTML.
+ *
+ * @param {string} str - Stringa da sanificare
+ * @returns {string} Stringa con caratteri HTML escapati
+ */
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g,  '&amp;')
+        .replace(/</g,  '&lt;')
+        .replace(/>/g,  '&gt;')
+        .replace(/"/g,  '&quot;')
+        .replace(/'/g,  '&#039;');
+}
+
+/**
+ * Esegue l'escape di una stringa per uso in SSML/XML.
+ * Preserva i tag SSML tra parentesi quadre (es. [<say-as>]).
+ * Tutto il resto viene escapato per evitare injection nell'XML inviato a Polly.
+ *
+ * @param {string} str - Testo del messaggio IVR
+ * @returns {string} Testo con entità XML escapate (tranne i tag SSML)
+ */
+function escapeXmlPreserveSSML(str) {
+    const parts = str.split('');
+    for (let i = 0; i < parts.length; i++) {
+        if (parts[i] === '[') {
+            // Salta il contenuto del tag SSML fino alla parentesi chiusa
+            while (i < parts.length && parts[i] !== ']') i++;
+            continue;
+        }
+        switch (parts[i]) {
+            case '&':  parts[i] = '&amp;';  break;
+            case '<':  parts[i] = '&lt;';   break;
+            case '>':  parts[i] = '&gt;';   break;
+            case '"':  parts[i] = '&quot;'; break;
+            case "'":  parts[i] = '&apos;'; break;
+        }
+    }
+    return parts.join('');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOADER UI
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Stato originale dei pulsanti prima di disabilitarli con il loader */
 let originalButtonStates = [];
 
-// Funzione per attivare il loader
+/**
+ * Attiva il loader: riduce l'opacità e disabilita tutti i pulsanti.
+ * Previene doppie sottomissioni durante elaborazioni in corso.
+ */
 function showLoader() {
-    // Imposta l'opacità di .container a 0.5
     document.querySelector('.container').style.opacity = '0.5';
-
-    // Disabilita tutti i pulsanti nella pagina
     const buttons = document.querySelectorAll('button');
-    originalButtonStates = Array.from(buttons).map(button => button.disabled);
-    buttons.forEach(button => button.disabled = true);
+    originalButtonStates = Array.from(buttons).map(btn => btn.disabled);
+    buttons.forEach(btn => { btn.disabled = true; });
 }
 
-// Funzione per disattivare il loader
+/**
+ * Disattiva il loader: ripristina opacità e stato dei pulsanti.
+ */
 function hideLoader() {
-
-    // Ripristina l'opacità di .container a 1
     document.querySelector('.container').style.opacity = '1';
-
-    // Abilita i pulsanti precedentemente disabilitati
-    const buttons = document.querySelectorAll('button');
-    buttons.forEach((button, index) => {
-        button.disabled = originalButtonStates[index];
+    document.querySelectorAll('button').forEach((btn, i) => {
+        btn.disabled = originalButtonStates[i] ?? false;
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MODALE ERRORE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Mostra un messaggio di errore in un modal Bootstrap.
+ * Il testo viene escapato per prevenire XSS.
+ *
+ * @param {string} message - Messaggio da visualizzare
+ */
+function showError(message) {
+    // Usa textContent per prevenire XSS — mai innerHTML con dati non fidati
+    document.getElementById('errorMessage').textContent = message;
+    const modal = new bootstrap.Modal(document.getElementById('errorModal'));
+    modal.show();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SELEZIONE MUSICA
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Carica le opzioni musicali dal server e le inserisce nel <select>.
+ * I valori vengono inseriti come attributi, non come innerHTML,
+ * per prevenire injection da nomi file malevoli.
+ *
+ * @param {string} apiUrl         - URL dell'API che restituisce la lista MP3
+ * @param {string} selectElementId - ID dell'elemento <select> da popolare
+ */
 function loadMusicOptions(apiUrl, selectElementId) {
     fetch(apiUrl)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json(); // Supponiamo che il server restituisca un JSON
+        .then(res => {
+            if (!res.ok) throw new Error('Errore nel recupero delle canzoni.');
+            return res.json();
         })
         .then(data => {
-            const musicSelect = document.getElementById(selectElementId); // Ottieni il riferimento al <select>
-            musicSelect.innerHTML = ""; // Pulisci le opzioni esistenti
+            const select = document.getElementById(selectElementId);
+            select.innerHTML = '';
 
-            // Aggiungi un'opzione predefinita
-            let defaultOption = document.createElement('option');
-            defaultOption.value = "blank";
-            defaultOption.textContent = "Nessuna canzone";
-            defaultOption.classList.add("self-align-center");
-            musicSelect.appendChild(defaultOption);
+            // Opzione predefinita (nessuna canzone)
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value       = 'blank';
+            defaultOpt.textContent = 'Nessuna canzone';
+            select.appendChild(defaultOpt);
 
-            data.forEach(function (value) {
-                // Rimuovi l'estensione .mp3
-                let songName = value.replace('.mp3', '');
-                // Limita il testo a 30 caratteri
-                let displayText = songName.length > 30 ? songName.substring(0, 30).trim() + '...' : songName;
+            data.forEach(value => {
+                // Usa textContent (non innerHTML) per prevenire XSS da nomi file malevoli
+                const songName    = value.replace('.mp3', '');
+                const displayText = songName.length > 30
+                    ? songName.substring(0, 30).trim() + '...'
+                    : songName;
 
-                let option = document.createElement('option');
-                option.value = value; // Imposta il valore dell'opzione
-                option.textContent = displayText; // Imposta il testo visualizzato
-                musicSelect.appendChild(option); // Aggiungi l'elemento <option> al <select>
+                const option = document.createElement('option');
+                option.value       = value;       // attributo value: sicuro
+                option.textContent = displayText; // textContent: sicuro
+                select.appendChild(option);
             });
         })
-        .catch(error => {
-            console.error('C\'è stato un problema con la richiesta:', error);
-        });
+        .catch(err => console.error('[loadMusicOptions]', err));
 }
 
-window.addEventListener('load', function () {
-    const textareas = document.querySelectorAll('textarea');
-    textareas.forEach(textarea => {
-        textarea.value = ''; // Imposta il valore a una stringa vuota
-    });
-    const checkboxes = document.querySelectorAll('input[type="checkbox"][id^="translateCheck"]');
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = false; // Imposta il checkbox come non selezionato
-    });
+// ─────────────────────────────────────────────────────────────────────────────
+// INIZIALIZZAZIONE PAGINA
+// ─────────────────────────────────────────────────────────────────────────────
+
+window.addEventListener('load', () => {
+    // Pulisce le textarea e i checkbox al caricamento (evita dati fantasma dopo reload)
+    document.querySelectorAll('textarea').forEach(ta => { ta.value = ''; });
+    document.querySelectorAll('input[type="checkbox"][id^="translateCheck"]')
+            .forEach(cb => { cb.checked = false; });
 
     loadMusicOptions('/api/canzoni', 'music');
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GESTIONE RIGHE FORM (aggiungi / rimuovi)
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Initialize a counter for dynamically added input fields
+/** Contatore progressivo per l'ID delle righe dinamiche */
 let inputCounter = 1;
 
-// Add an event listener to the 'addInput' button to handle clicks
-document.getElementById('addInput').addEventListener('click', e => {
-    let windowHeight = window.innerHeight;
-    let pageHeight = document.documentElement.scrollHeight;
-    // Select the main form where new input fields will be added
-    const mainForm = document.getElementById('main');
-    // Create a new div element for the new input row
-    const newRow = document.createElement('div');
-    newRow.className = 'row'; // Set the class for styling
-    newRow.id = 'formRow' + inputCounter; // Set a unique ID for the new row
-
-    // Set the inner HTML of the new row with input fields and a button
-    newRow.innerHTML = `
+/**
+ * Genera l'HTML di una nuova riga del form IVR.
+ * NOTA SICUREZZA: inputCounter è sempre un intero controllato lato client,
+ * NON proviene dall'utente. Tutti gli altri valori sono attributi, mai innerHTML.
+ *
+ * @param {number} n - Indice della riga
+ * @returns {string} HTML della riga
+ */
+function buildRowHtml(n) {
+    return `
     <div class="col-md-3">
         <div class="row d-flex ms-md-1 d-md-align-items-start justify-content-md-start justify-content-center">
-            <button type="button" class="btn-close custom-btn-close" id="deleteRow${inputCounter}"></button>
+            <button type="button" class="btn-close custom-btn-close" id="deleteRow${n}"></button>
         </div>
         <div class="row m-1 mt-3">
-            <textarea class="form-control" id="fileName${inputCounter}" rows="1" placeholder="Tipo(Benvenuto, Notte...)"></textarea>
+            <textarea class="form-control" id="fileName${n}" rows="1" placeholder="Tipo(Benvenuto, Notte...)"></textarea>
         </div>
         <div class="row nameShortcut">
-            <div class="col-2 m-1">
-                <button type="button" id="Benvenuto_fileName${inputCounter}" class="btn btn-sm btn-primary">Ben.</button>
-            </div>
-            <div class="col-2 m-1">
-                <button type="button" id="Notte_fileName${inputCounter}" class="btn btn-sm btn-primary">Not.</button>
-            </div>
-            <div class="col-2 m-1">
-                <button type="button" id="Attesa_fileName${inputCounter}" class="btn btn-sm btn-primary">Att.</button>
-            </div>
-            <div class="col-2 m-1">
-                <button type="button" id="Occupato_fileName${inputCounter}" class="btn btn-sm btn-primary">Occ.</button>
-            </div>
-        </div>    
+            <div class="col-2 m-1"><button type="button" id="Benvenuto_fileName${n}" class="btn btn-sm btn-primary">Ben.</button></div>
+            <div class="col-2 m-1"><button type="button" id="Notte_fileName${n}"     class="btn btn-sm btn-primary">Not.</button></div>
+            <div class="col-2 m-1"><button type="button" id="Attesa_fileName${n}"    class="btn btn-sm btn-primary">Att.</button></div>
+            <div class="col-2 m-1"><button type="button" id="Occupato_fileName${n}"  class="btn btn-sm btn-primary">Occ.</button></div>
+        </div>
         <div class="row m-1">
             <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="translateCheck${inputCounter}" />
-                <label class="form-check-label" for="translateCheck${inputCounter}">Aggiungi traduzione</label>
+                <input class="form-check-input" type="checkbox" id="translateCheck${n}" />
+                <label class="form-check-label" for="translateCheck${n}">Aggiungi traduzione</label>
             </div>
         </div>
     </div>
     <div class="col-md-8">
         <div class="row">
-            <textarea class="form-control m-1" id="messageText${inputCounter}" rows="5"></textarea>
-        </div>    
+            <textarea class="form-control m-1" id="messageText${n}" rows="5"></textarea>
+        </div>
     </div>
     <div class="col-md-1 text-center d-flex flex-column align-items-center justify-content-center">
-        <button class="btn btn-danger mt-3 mb-3" id="controller${inputCounter}" disabled>Play</button>
+        <button class="btn btn-danger mt-3 mb-3" id="controller${n}" disabled>Play</button>
     </div>
-    <div class="row mt-1 rowLine">
-        <hr>
-    </div>
-`;
-
-    // Append the new row to the main form
-    mainForm.appendChild(newRow);
-
-    //auto scroll page overflow
-    if (windowHeight < pageHeight) {
-        window.scrollBy(0, pageHeight);
-    }
-
-    inputCounter++; // Increment the counter for the next input field
-});
-
-// Select the main container for input fields
-const container = document.getElementById('main');
-
-// Add an event listener to the container to handle changes in input fields
-container.addEventListener('change', function (event) {
-    // Check if the changed element is a checkbox for translation
-    if (event.target.matches('input[type="checkbox"]') && event.target.id.startsWith('translateCheck')) {
-        if (event.target.checked) { // If the checkbox is checked
-            //console.log(event.target.id + ' è stato selezionato'); // Log selection
-            const number = event.target.id.replace('translateCheck', ''); // Extract the number from the ID
-            const existingEl = document.getElementById('messageText' + number); // Get the corresponding message textarea
-            if (existingEl) {
-                // Set the rows attributef of the textarea to 2 for translation
-                existingEl.setAttribute('rows', '2');
-                const existingRow = document.querySelector('.col-md-8 .row:has(textarea#messageText' + number + ')');
-
-                // Create a new div for the translation textarea
-                const newDiv = document.createElement('div');
-                newDiv.className = 'row';
-                newDiv.innerHTML = '<textarea class="form-control m-1" id="ENGmessageText' + number + '" rows="2"></textarea>';
-
-                // Insert the new translation textarea after the existing message textarea
-                existingRow.insertAdjacentElement('afterend', newDiv);
-            }
-
-            const newButton = document.createElement('button');
-            newButton.className = 'btn btn-danger mt-3 mb-3';
-            newButton.id = 'ENGcontroller' + number;
-            newButton.disabled = true
-            newButton.innerText = 'Play';
-            const existingButton = document.getElementById('controller' + number);
-            existingButton.parentNode.insertBefore(newButton, existingButton.nextSibling);
-
-        } else { // If the checkbox is unchecked
-            //console.log(event.target.id + ' è stato deselezionato'); // Log deselection
-            const number = event.target.id.replace('translateCheck', ''); // Extract the number
-            const existingEl = document.getElementById('messageText' + number); // Get the corresponding message textarea
-            document.getElementById('ENGcontroller' + number).remove();
-            if (existingEl) {
-                // Restore the rows attribute of the textarea to 5
-                existingEl.setAttribute('rows', '5');
-                const textarea = document.getElementById('ENGmessageText' + number); // Get the translation textarea
-                if (textarea) {
-                    const div = textarea.parentElement; // Get the parent div of the translation textarea
-                    if (div) {
-                        div.remove(); // Remove the translation textarea div
-                    }
-                }
-            }
-        }
-    }
-});
-
-document.addEventListener('click', async function (event) {
-    const extractNumbers = (str) => {
-        const match = str.match(/\d+/);
-        return match ? match[0] : null;
-    };
-
-    if (event.target.matches('[id^="deleteRow"]') && document.querySelectorAll('[id^="formRow"]').length > 1) {
-        const id = extractNumbers(event.target.id);
-        const row = document.getElementById('formRow' + id);
-        const fileName = document.getElementById('fileName' + id)?.value; // Assicurati di ottenere il valore corretto
-        const folderPath = '_temp_' + document.getElementById('ragioneSociale_input').value; // Specifica il percorso della cartella
-
-        if (row) {
-            row.remove();
-            if (fileName !== '') {
-                // Controlla se l'elemento engMessageText esiste
-                const engMessageTextElement = document.getElementById('engMessageText' + id);
-                const filesToDelete = [fileName + '.mp3'];
-
-                if (engMessageTextElement) {
-                    // Se l'elemento esiste, aggiungi il file ENG_${fileName}.mp3
-                    filesToDelete.push('ENG_' + fileName + '.mp3');
-                }
-
-                // Invia una richiesta al server per eliminare i file
-                try {
-                    const response = await fetch('/delete-audio', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRF-Token': csrfToken
-                        },
-                        body: JSON.stringify({ files: filesToDelete, folder: folderPath, _csrf: csrfToken }),
-                    });
-
-                    if (!response.ok) {
-                        throw new Error('Errore durante l\'eliminazione dei file');
-                    }
-                    //console.log('File audio eliminati con successo.');
-                } catch (error) {
-                    //console.error('Errore:', error);
-                }
-            }
-        }
-    }
-});
-
-
-
-document.getElementById("music").addEventListener('click', function (event) {
-    const dropdownItems = document.querySelectorAll('#dropdownMenu .dropdown-item');
-    dropdownItems.forEach(item => {
-        item.addEventListener('click', function (event) {
-            // Ottieni il valore completo dall'attributo 'value'
-            const selectedValue = event.target.getAttribute('value');
-
-            // Imposta il valore del bottone con il valore completo
-            document.getElementById("music").value = selectedValue;
-
-            // Aggiorna il testo del bottone
-            document.getElementById("music").textContent = event.target.textContent;;
-        });
-    });
-});
-
-
-
-
-// Funzione per ottenere il token CSRF
-async function getCsrfToken() {
-    const response = await fetch('/api/csrf-token');
-    const data = await response.json();
-    return data.csrfToken;
+    <div class="row mt-1 rowLine"><hr></div>
+    `;
 }
 
-// Listen for the 'click' event on the 'sendQuery' button
-document.getElementById('sendQuery').addEventListener('click', async e => {
+/** Aggiunge una nuova riga al form */
+document.getElementById('addInput').addEventListener('click', () => {
+    const mainForm = document.getElementById('main');
+    const newRow   = document.createElement('div');
+    newRow.className = 'row';
+    newRow.id        = `formRow${inputCounter}`;
+    newRow.innerHTML = buildRowHtml(inputCounter); // inputCounter è un intero sicuro
+    mainForm.appendChild(newRow);
+
+    // Auto-scroll se la pagina supera l'altezza della finestra
+    if (window.innerHeight < document.documentElement.scrollHeight) {
+        window.scrollBy(0, document.documentElement.scrollHeight);
+    }
+
+    inputCounter++;
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRADUZIONE (checkbox)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const container = document.getElementById('main');
+
+/**
+ * Gestisce il toggle della checkbox "Aggiungi traduzione".
+ * Mostra/nasconde la textarea inglese e il pulsante Play ENG.
+ */
+container.addEventListener('change', (event) => {
+    if (!event.target.matches('input[type="checkbox"]') || !event.target.id.startsWith('translateCheck')) return;
+
+    const number = event.target.id.replace('translateCheck', '');
+
+    if (event.target.checked) {
+        const existingEl  = document.getElementById(`messageText${number}`);
+        const existingRow = document.querySelector(`.col-md-8 .row:has(textarea#messageText${number})`);
+        if (!existingEl || !existingRow) return;
+
+        existingEl.setAttribute('rows', '2');
+
+        // Crea la textarea ENG senza innerHTML con contenuto utente
+        const newDiv      = document.createElement('div');
+        newDiv.className  = 'row';
+        const engTextarea = document.createElement('textarea');
+        engTextarea.className = 'form-control m-1';
+        engTextarea.id        = `ENGmessageText${number}`;
+        engTextarea.rows      = 2;
+        newDiv.appendChild(engTextarea);
+        existingRow.insertAdjacentElement('afterend', newDiv);
+
+        // Crea il pulsante Play ENG
+        const newButton   = document.createElement('button');
+        newButton.className  = 'btn btn-danger mt-3 mb-3';
+        newButton.id         = `ENGcontroller${number}`;
+        newButton.disabled   = true;
+        newButton.textContent = 'Play';
+        const existingButton = document.getElementById(`controller${number}`);
+        existingButton.parentNode.insertBefore(newButton, existingButton.nextSibling);
+
+    } else {
+        const engController = document.getElementById(`ENGcontroller${number}`);
+        if (engController) engController.remove();
+
+        const existingEl = document.getElementById(`messageText${number}`);
+        if (existingEl) {
+            existingEl.setAttribute('rows', '5');
+            const textarea = document.getElementById(`ENGmessageText${number}`);
+            if (textarea?.parentElement) textarea.parentElement.remove();
+        }
+    }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ELIMINAZIONE RIGA
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Gestisce il click sul pulsante "X" per eliminare una riga.
+ * Invia al server la richiesta di eliminare i file audio già generati.
+ */
+document.addEventListener('click', async (event) => {
+    if (!event.target.matches('[id^="deleteRow"]')) return;
+    if (document.querySelectorAll('[id^="formRow"]').length <= 1) return;
+
+    const id         = event.target.id.match(/\d+/)?.[0];
+    const row        = document.getElementById(`formRow${id}`);
+    const fileName   = document.getElementById(`fileName${id}`)?.value;
+    const folderPath = `_temp_${document.getElementById('ragioneSociale_input').value}`;
+
+    if (row) {
+        row.remove();
+        if (fileName) {
+            const filesToDelete = [`${fileName}.mp3`];
+            if (document.getElementById(`ENGmessageText${id}`)) {
+                filesToDelete.push(`eng_${fileName}.mp3`);
+            }
+
+            try {
+                const token = await fetchCsrfToken();
+                await fetch('/delete-audio', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+                    body:    JSON.stringify({ files: filesToDelete, folder: folderPath, _csrf: token }),
+                });
+            } catch { /* errore silenzioso: la riga è già rimossa dal DOM */ }
+        }
+    }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SINTESI VOCALE (Genera e ascolta)
+// ─────────────────────────────────────────────────────────────────────────────
+
+document.getElementById('sendQuery').addEventListener('click', async () => {
     if (!audioPlayer.paused) {
         audioPlayer.pause();
-        document.getElementById(lastAudioController).innerText = "Play"
+        const ctrl = document.getElementById(lastAudioController);
+        if (ctrl) ctrl.textContent = 'Play';
     }
+
     showLoader();
     document.getElementById('saveAll').disabled = true;
     const controllers = document.querySelectorAll('[id^="ENGcontroller"], [id^="controller"]');
-    controllers.forEach(el => el.disabled = true);
+    controllers.forEach(el => { el.disabled = true; });
 
-    // Initialize company name variable
-    let companyName = "";
-
-    // Check if the company name input is empty
-    if (document.getElementById('ragioneSociale_input').value.length > 0) {
-        companyName = document.getElementById('ragioneSociale_input').value;
-    } else {
-        document.getElementById('errorMessage').innerText = 'Ragione sociale richiesta, compila il campo per procedere';
-        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+    // Validazione nome azienda
+    const companyName = document.getElementById('ragioneSociale_input').value.trim();
+    if (!companyName) {
+        showError('Ragione sociale richiesta, compila il campo per procedere.');
         hideLoader();
-        modal.show(); // Mostra il modale
-        return; // Stop execution if company name is not provided
+        return;
     }
 
-    // Get the song value, or null if "blank" is selected
-    let song = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
-
-    // Select all rows that start with 'formRow'
+    // Raccolta dati dalle righe del form
     const rows = document.querySelectorAll('[id^="formRow"]');
-    const data = []; // Array to hold message objects
+    const data = [];
 
-    // Iterate through each row to collect data
-    rows.forEach(row => {
-        const fileName = row.querySelector('[id^="fileName"]').value.trim(); // Trim whitespace
-        const messageText = row.querySelector('[id^="messageText"]').value.trim(); // Trim whitespace
-        const engMessageText = row.querySelector('[id^="ENGmessageText"]'); // Get the English message text
-        const playButtonId = row.querySelector('[id^="controller"]').id;
-        // Check if fileName and messageText are valid before pushing to data array
-        if (fileName && messageText && (!engMessageText || engMessageText.value.trim() !== '')) {
-            const rowData = {
-                fileName: fileName,
-                messageText: escapeString(messageText),
-                engMessageText: engMessageText ? escapeString(engMessageText.value.trim()) : null, // Trim if it exists
-                playButtonId: playButtonId
-            };
+    try {
+        rows.forEach(row => {
+            const fileName      = row.querySelector('[id^="fileName"]').value.trim();
+            const messageText   = row.querySelector('[id^="messageText"]').value.trim();
+            const engTextarea   = row.querySelector('[id^="ENGmessageText"]');
+            const playButtonId  = row.querySelector('[id^="controller"]').id;
 
-            data.push(rowData); // Add the object to the data array
-        } else {
-            document.getElementById('errorMessage').innerText = 'Compila tutti i campi per procedere';
-            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            hideLoader();
-            modal.show(); // Mostra il modale
-            throw new Error('Validation error: File name or message text is missing in a row.'); // Throw an error
-        }
-    });
-
-    // Construct the query object to send to the server
-    const query = {
-        companyName,
-        song,
-        data
-    };
-
-    // Ottieni il token CSRF
-    const csrfToken = await getCsrfToken();
-
-    // Send the query object to the server using fetch
-    fetch('/api/synthesize', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': csrfToken // Aggiungi il token CSRF negli headers
-        },
-        body: JSON.stringify({ ...query, _csrf: csrfToken }) // Aggiungi il token CSRF nel body
-    })
-        .then(response => {
-            if (!response.ok) {
-                controllers.forEach(el => el.disabled = true);
-                throw new Error('Network response was not ok ' + response.statusText); // Throw an error for bad responses
+            if (!fileName || !messageText) {
+                throw new Error('validation');
             }
-            return response.json(); // Parse JSON response
-        })
-        .then(data => {
-            //console.log(data.message); // Handle successful response
-            hideLoader();
-            controllers.forEach(el => el.disabled = false);
-            document.getElementById('saveAll').disabled = false;
-        })
-        .catch(error => {
-            console.error('Error:', error); // Handle any errors during fetch
-            document.getElementById('errorMessage').innerText = 'Si è verificato un errore di rete, controlla la connessione e riprova'; // Imposta il messaggio di errore
-            let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-            hideLoader();
-            modal.show(); // Mostra il modale
+            if (engTextarea && !engTextarea.value.trim()) {
+                throw new Error('validation');
+            }
+
+            data.push({
+                fileName,
+                messageText:    escapeXmlPreserveSSML(messageText),
+                engMessageText: engTextarea ? escapeXmlPreserveSSML(engTextarea.value.trim()) : null,
+                playButtonId,
+            });
         });
-});
-
-
-const audioPlayer = document.getElementById('audioPlayer');
-let lastAudioController = "controller0";
-container.addEventListener('click', async (e) => {
-    // Check if the clicked element matches your controllers
-    if (e.target.matches('[id^="ENGcontroller"], [id^="controller"]')) {
-        e.preventDefault();
-        const folderName = '_temp_' + document.getElementById('ragioneSociale_input').value;
-        const controllerName = e.target.id;
-        if (!audioPlayer.paused && lastAudioController == controllerName) {
-            audioPlayer.pause();
-            e.target.innerText = "Play";
-        } else {
-            try {
-                //console.log(`Fetching from: /play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
-
-                const response = await fetch(`/play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    // If audio is already playing, stop it first
-                    if (!audioPlayer.paused) {
-                        audioPlayer.pause();
-                    }
-                    // Set the new audio source and start playing
-                    audioPlayer.src = `/${folderName}/${data.audioUrl.split('/').pop()}`; // Ensure the URL is correct
-                    audioPlayer.load(); // Load the new file
-                    if (document.getElementById(lastAudioController)) {
-                        document.getElementById(lastAudioController).innerText = "Play"
-                    }
-                    e.target.innerText = "Pausa";
-                    audioPlayer.play();
-                    lastAudioController = controllerName;
-                } else {
-                    document.getElementById('errorMessage').innerText = 'Audio non trovato, riprova o ricrealo'; // Imposta il messaggio di errore
-                    let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-                    hideLoader();
-                    modal.show(); // Mostra il modale
-                }
-            } catch (error) {
-                console.error('Errore durante la richiesta:', error);
-                document.getElementById('errorMessage').innerText = 'Errore di rete, controlla la connessione e riprova'; // Imposta il messaggio di errore
-                let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-                hideLoader();
-                modal.show(); // Mostra il modale
-            }
-        }
-    }
-});
-
-audioPlayer.addEventListener('ended', () => {
-    document.getElementById(lastAudioController).innerText = "Play"
-});
-
-container.addEventListener('input', e => {
-
-    if (e.target.matches('[id^="ENGmessageText"]')) {
-        let selector = e.target.id.match(/\d+/);
-        document.getElementById('ENGcontroller' + selector).disabled = true;
-
-    } if (e.target.matches('[id^="messageText"]')) {
-        let selector = e.target.id.match(/\d+/);
-        document.getElementById('controller' + selector).disabled = true;
-    }
-});
-
-document.getElementById('ragioneSociale_input').addEventListener('input', e => {
-    document.querySelectorAll('[id^="controller"], [id^="ENGcontroller"]').forEach(el => {
-        el.disabled = true; // Disabilita gli elementi
-    });
-});
-
-
-document.getElementById('ragioneSociale_input').addEventListener('keypress', function (event) {
-    if (event.key === 'Enter') {
-        event.preventDefault(); // Impedisce il ritorno a capo
-    }
-});
-
-// Aggiungi un event listener per ogni textarea
-document.addEventListener('change', (event) => {
-    document.getElementById('saveAll').disabled = true;
-});
-
-
-document.getElementById('saveAll').addEventListener('click', async (e) => {
-    e.preventDefault(); // Prevenire il comportamento predefinito del pulsante (se necessario)
-    if (!audioPlayer.paused) {
-        audioPlayer.pause();
-        document.getElementById(lastAudioController).innerText = "Play"
-    }
-    showLoader();
-    const folderName = document.getElementById('ragioneSociale_input').value.trim();
-    const backgroundSong = document.getElementById('music').value !== "blank" ? document.getElementById('music').value : null;
-
-    if (!folderName) {
-        document.getElementById('errorMessage').innerText = 'Salvataggio non trovato, genera nuovamente i messaggi per proseguire';
-        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
+    } catch {
+        showError('Compila tutti i campi per procedere.');
         hideLoader();
-        modal.show(); // Mostra il modale
         return;
     }
 
     try {
-        const response = await fetch('/api/save', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': csrfToken
-            },
-            body: JSON.stringify({ folderName, backgroundSong, _csrf: csrfToken }), // Send data as JSON
+        const token = await fetchCsrfToken();
+        const response = await fetch('/api/synthesize', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+            body:    JSON.stringify({ companyName, data, _csrf: token }),
         });
 
         if (!response.ok) {
-            const errorData = await response.text(); // Get the error response as text
-            throw new Error(errorData || 'Errore nella richiesta.'); // Handle errors
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || 'Errore del server.');
         }
 
-        // Create a blob from the response
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-
-        // Create a link element
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${folderName}.zip`; // Set the file name for download
-        document.body.appendChild(a); // Append to the body
-        a.click(); // Programmatically click the link to trigger the download
-        a.remove(); // Remove the link after downloading
-        window.URL.revokeObjectURL(url); // Clean up the URL object 
-        window.location.reload(true);
-        setTimeout(function() {
-            hideLoader();
-        }, 2000); // 2000 millisecondi equivalgono a 2 secondi
-        
-        
-
-    } catch (error) {
-        document.getElementById('errorMessage').innerText = `Errore di rete, controlla la connessione e/o genera nuovamente i messaggi per proseguire`;
-        let modal = new bootstrap.Modal(document.getElementById('errorModal'));
         hideLoader();
-        modal.show(); // Mostra il modale
+        controllers.forEach(el => { el.disabled = false; });
+        document.getElementById('saveAll').disabled = false;
+
+    } catch (err) {
+        console.error('[sendQuery]', err);
+        showError('Si è verificato un errore di rete, controlla la connessione e riprova.');
+        hideLoader();
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIO PLAYER (Play / Pausa)
+// ─────────────────────────────────────────────────────────────────────────────
 
-//no duplicate fileName
+const audioPlayer      = document.getElementById('audioPlayer');
+let   lastAudioController = 'controller0';
+
+/**
+ * Gestisce il click sui pulsanti Play/Pausa.
+ * Recupera l'URL dell'audio dal server e avvia la riproduzione.
+ */
+container.addEventListener('click', async (e) => {
+    if (!e.target.matches('[id^="ENGcontroller"], [id^="controller"]')) return;
+
+    e.preventDefault();
+    const folderName     = `_temp_${document.getElementById('ragioneSociale_input').value}`;
+    const controllerName = e.target.id;
+
+    if (!audioPlayer.paused && lastAudioController === controllerName) {
+        audioPlayer.pause();
+        e.target.textContent = 'Play';
+        return;
+    }
+
+    try {
+        const response = await fetch(
+            `/play/${encodeURIComponent(folderName)}/${encodeURIComponent(controllerName)}`
+        );
+
+        if (!response.ok) {
+            showError('Audio non trovato, riprova o ricrealo.');
+            return;
+        }
+
+        const data = await response.json();
+
+        if (!audioPlayer.paused) audioPlayer.pause();
+
+        const prevCtrl = document.getElementById(lastAudioController);
+        if (prevCtrl) prevCtrl.textContent = 'Play';
+
+        // Costruisce l'URL dell'audio sanificando folder e filename
+        const audioFileName = encodeURIComponent(data.audioUrl.split('/').pop());
+        audioPlayer.src     = `/${encodeURIComponent(folderName)}/${audioFileName}`;
+        audioPlayer.load();
+        e.target.textContent = 'Pausa';
+        audioPlayer.play();
+        lastAudioController = controllerName;
+
+    } catch (err) {
+        console.error('[audioPlayer]', err);
+        showError('Errore di rete, controlla la connessione e riprova.');
+    }
+});
+
+audioPlayer.addEventListener('ended', () => {
+    const ctrl = document.getElementById(lastAudioController);
+    if (ctrl) ctrl.textContent = 'Play';
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DISABILITA CONTROLLER AL CAMBIO TESTO / NOME AZIENDA
+// ─────────────────────────────────────────────────────────────────────────────
+
+container.addEventListener('input', e => {
+    const match = e.target.id?.match(/\d+/);
+    if (!match) return;
+    const n = match[0];
+
+    if (e.target.matches('[id^="ENGmessageText"]')) {
+        const ctrl = document.getElementById(`ENGcontroller${n}`);
+        if (ctrl) ctrl.disabled = true;
+    } else if (e.target.matches('[id^="messageText"]')) {
+        const ctrl = document.getElementById(`controller${n}`);
+        if (ctrl) ctrl.disabled = true;
+    }
+});
+
+document.getElementById('ragioneSociale_input').addEventListener('input', () => {
+    document.querySelectorAll('[id^="controller"], [id^="ENGcontroller"]')
+            .forEach(el => { el.disabled = true; });
+});
+
+document.getElementById('ragioneSociale_input').addEventListener('keypress', e => {
+    if (e.key === 'Enter') e.preventDefault();
+});
+
+document.addEventListener('change', () => {
+    document.getElementById('saveAll').disabled = true;
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SALVA COME ZIP
+// ─────────────────────────────────────────────────────────────────────────────
+
+document.getElementById('saveAll').addEventListener('click', async (e) => {
+    e.preventDefault();
+
+    if (!audioPlayer.paused) {
+        audioPlayer.pause();
+        const ctrl = document.getElementById(lastAudioController);
+        if (ctrl) ctrl.textContent = 'Play';
+    }
+
+    showLoader();
+    const folderName      = document.getElementById('ragioneSociale_input').value.trim();
+    const backgroundSong  = document.getElementById('music').value !== 'blank'
+        ? document.getElementById('music').value
+        : null;
+
+    if (!folderName) {
+        showError('Salvataggio non trovato, genera nuovamente i messaggi per proseguire.');
+        hideLoader();
+        return;
+    }
+
+    try {
+        const token    = await fetchCsrfToken();
+        const response = await fetch('/api/save', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+            body:    JSON.stringify({ folderName, backgroundSong, _csrf: token }),
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || 'Errore nella richiesta.');
+        }
+
+        const blob = await response.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `${folderName}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        setTimeout(() => window.location.reload(true), 2000);
+        setTimeout(hideLoader, 2000);
+
+    } catch (err) {
+        showError('Errore di rete, controlla la connessione e/o genera nuovamente i messaggi per proseguire.');
+        hideLoader();
+    }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VALIDAZIONE NOME FILE (no duplicati)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Controlla e risolve i nomi file duplicati nelle textarea fileName.
+ * Se un valore esiste già, aggiunge un suffisso numerico progressivo.
+ *
+ * @param {Event} event - Evento focusout sulla textarea
+ */
 function checkTextareaValue(event) {
     const currentValue = event.target.value;
-    const textareas = document.querySelectorAll('textarea[id^="fileName"]');
+    const textareas    = document.querySelectorAll('textarea[id^="fileName"]');
     let duplicateFound = false;
-    let suffix = 1;
-    let newValue = currentValue;
+    let suffix         = 1;
+    let newValue       = currentValue;
 
-    textareas.forEach(textarea => {
-        if (textarea !== event.target && textarea.value === currentValue) {
-            duplicateFound = true;
-        }
+    textareas.forEach(ta => {
+        if (ta !== event.target && ta.value === currentValue) duplicateFound = true;
     });
 
     while (duplicateFound) {
-        newValue = `${currentValue}(${suffix})`;
-        suffix++;
+        newValue       = `${currentValue}(${suffix++})`;
         duplicateFound = false;
-        textareas.forEach(textarea => {
-            if (textarea !== event.target && textarea.value === newValue) {
-                duplicateFound = true;
-            }
+        textareas.forEach(ta => {
+            if (ta !== event.target && ta.value === newValue) duplicateFound = true;
         });
     }
 
     event.target.value = newValue;
 }
 
-
-// Aggiungi un event listener all'elemento genitore
-container.addEventListener('focusout', function (event) {
-    if (event.target.matches('textarea[id^="fileName"]') && event.target.value != "") {
-        event.target.value = event.target.value.charAt(0).toUpperCase() + event.target.value.slice(1);
-        checkTextareaValue(event);
-    }
+container.addEventListener('focusout', (event) => {
+    if (!event.target.matches('textarea[id^="fileName"]') || !event.target.value) return;
+    // Capitalizza la prima lettera
+    event.target.value = event.target.value.charAt(0).toUpperCase() + event.target.value.slice(1);
+    checkTextareaValue(event);
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NAVIGAZIONE CON TAB TRA TEXTAREA
+// ─────────────────────────────────────────────────────────────────────────────
 
-//chage focus with TAB
-document.addEventListener('keydown', function (event) {
+document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    event.preventDefault();
+
     const textareas = document.querySelectorAll('textarea');
-    if (event.key === 'Tab') {
-        event.preventDefault(); // Previene il comportamento predefinito del tasto TAB
-
-        // Trova l'indice dell'elemento attualmente a fuoco
-        const focusedElement = document.activeElement;
-        const index = Array.prototype.indexOf.call(textareas, focusedElement);
-
-        // Calcola il prossimo indice
-        let nextIndex = (index + 1) % textareas.length; // Torna all'inizio se siamo all'ultimo
-
-        // Imposta il focus sul prossimo textarea
-        textareas[nextIndex].focus();
-    }
+    const index     = Array.from(textareas).indexOf(document.activeElement);
+    textareas[(index + 1) % textareas.length].focus();
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SHORTCUT NOMI FILE
+// ─────────────────────────────────────────────────────────────────────────────
 
-function handleKeyDown(event) {
-    const key = event.key.toLowerCase();
-    const items = document.getElementById('dropdownMenu').getElementsByTagName('li');
-    for (let i = 0; i < items.length; i++) {
-        if (items[i].innerText.toLowerCase().startsWith(key)) {
-            ; // Imposta il focus sull'elemento corrispondente
-            document.getElementById('music').innerText = items[i].innerText;
-            document.getElementById('dropdownMenu').scrollIntoView({ behavior: "instant", block: "start" });
-            break; // Esci dal ciclo dopo aver trovato il primo elemento corrispondente
-        }
-    }
+/**
+ * Gestisce i pulsanti di scorciatoia (Ben., Not., Att., Occ.)
+ * che precompilano la textarea del tipo di messaggio.
+ */
+document.getElementById('main').addEventListener('click', e => {
+    if (e.target.tagName !== 'BUTTON' || !e.target.closest('.nameShortcut')) return;
 
+    const buttonId    = e.target.id;
+    const fileName    = buttonId.split('_').shift();
+    const extractedId = buttonId.split('_').pop();
+    const targetEl    = document.getElementById(extractedId);
+    // Usa value (non innerHTML) per prevenire injection
+    if (targetEl) targetEl.value = fileName;
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORRETTORE TESTO AL PASTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DAYS_MAP = {
+    lunedi:    'lunedì',
+    martedi:   'martedì',
+    mercoledi: 'mercoledì',
+    giovedi:   'giovedì',
+    venerdi:   'venerdì',
+};
+
+/**
+ * Corregge e normalizza il testo incollato:
+ * - Lowercase
+ * - Giorni della settimana con accento
+ * - Orari: "13.30" → "13:30"
+ * - Rimuove parentesi e contenuto
+ * - Normalizza punteggiatura e spazi
+ *
+ * @param {string} text - Testo grezzo incollato
+ * @returns {string} Testo normalizzato
+ */
+function correctText(text) {
+    text = text.toLowerCase();
+    text = text.replace(/\b(lunedi|martedi|mercoledi|giovedi|venerdi)\b/g,
+        match => DAYS_MAP[match] || match);
+    text = text.replace(/(\d{1,2})[.,](\d{2})/g, '$1:$2');
+    text = text.replace(/\s*\([^)]+\)/g, ' ');
+    text = text.replace(/\n+/g, '. ');
+    text = text.replace(/\.{2,}/g, '.');
+    text = text.replace(/,{2,}/g, ',');
+    text = text.replace(/\s+/g, ' ').trim();
+    text = text.replace(/\s*([.,])\s*/g, '$1 ').trim();
+    return text;
 }
 
-document.getElementById('music').addEventListener('focus', function () {
-    document.addEventListener('keydown', handleKeyDown);
-
-});
-
-document.getElementById('music').addEventListener('blur', function () {
-    document.removeEventListener('keydown', handleKeyDown);
-});
-
-function escapeString(str) {
-    // Utilizza una regex per trovare le parti della stringa
-    const parts = str.split('');
-
-    // Esegui l'escape solo sulle parti che non sono tra parentesi quadre
-    for (let i = 0; i < parts.length; i++) {
-        if (parts[i] == '[') {
-            while (parts[i] != ']') {
-                i++;
-            }
-        } else {
-            switch (parts[i]) {
-                case '&':
-                    parts[i] = '&amp;';
-                    break;
-                case '<':
-                    parts[i] = '&lt;';
-                    break;
-                case '>':
-                    parts[i] = '&gt;';
-                    break;
-                case '"':
-                    parts[i] = '&quot;';
-                    break;
-                case "'":
-                    parts[i] = '&apos;';
-                    break;
-                default:
-                    break;
-            }
+document.getElementById('main').addEventListener('paste', e => {
+    if (!e.target.matches('textarea[id^="messageText"]') || e.target.dataset.pasted) return;
+    setTimeout(() => {
+        if (e.target.value) {
+            e.target.value           = correctText(e.target.value);
+            e.target.dataset.pasted  = 'true';
         }
-    }
+    }, 0);
+});
 
-    // Riassembla la stringa
-    return parts.join('');
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// UPLOAD FILE AUDIO
+// ─────────────────────────────────────────────────────────────────────────────
 
-document.getElementById('uploadButton').addEventListener('click', function () {
+document.getElementById('uploadButton').addEventListener('click', () => {
     document.getElementById('audioUpload').click();
 });
 
-
-document.getElementById('copyButton1').addEventListener('click', function () {
-    const textToCopy = '[<say-as interpret-as="telephone">XX</say-as>]';
-    navigator.clipboard.writeText(textToCopy).then(function () {
-        // Chiudi il modal dopo la copia
-        const modalElement = document.getElementById('infoModal');
-        const modal = bootstrap.Modal.getInstance(modalElement);
-        modal.hide();
-    }).catch(function (err) {
-    });
-});
-
-
-document.getElementById('audioUpload').addEventListener('change', function (event) {
+document.getElementById('audioUpload').addEventListener('change', async (event) => {
     const file = event.target.files[0];
-    if (file) {
-        const formData = new FormData();
-        formData.append('audioFile', file); // Aggiungi il file audio
-        formData.append('_csrf', csrfToken); // Aggiungi il token csrf
-        showLoader();
-        fetch('/upload', {
-            method: 'POST',
-            body: formData, // Invia il FormData con il file
-            headers: {
-                'X-CSRF-Token': csrfToken // Aggiungi il token CSRF nell'header
-            }
+    if (!file) return;
+
+    // Validazione lato client (doppio controllo: il server valida comunque)
+    const allowedExts  = ['.mp3', '.wav'];
+    const fileExt      = file.name.lastIndexOf('.') !== -1
+        ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+        : '';
+    const MAX_SIZE_MB  = 10;
+
+    if (!allowedExts.includes(fileExt)) {
+        showError('Formato non supportato. Carica un file MP3 o WAV.');
+        return;
+    }
+    if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+        showError(`Il file supera il limite di ${MAX_SIZE_MB} MB.`);
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('audioFile', file);
+
+    showLoader();
+
+    try {
+        const token = await fetchCsrfToken();
+        formData.append('_csrf', token);
+
+        const response = await fetch('/upload', {
+            method:  'POST',
+            headers: { 'X-CSRF-Token': token },
+            body:    formData,
+        });
+
+        if (!response.ok) throw new Error('Caricamento fallito.');
+
+        loadMusicOptions('/api/canzoni', 'music');
+        hideLoader();
+
+        const toastEl = document.getElementById('successToast');
+        new bootstrap.Toast(toastEl).show();
+
+    } catch {
+        showError("Errore nel caricamento del file, controlla la dimensione (max 10 MB) e/o l'estensione (mp3 o wav).");
+        hideLoader();
+    }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COPIA TAG SSML
+// ─────────────────────────────────────────────────────────────────────────────
+
+document.getElementById('copyButton1').addEventListener('click', () => {
+    navigator.clipboard.writeText('[<say-as interpret-as="telephone">XX</say-as>]')
+        .then(() => {
+            const modalEl = document.getElementById('infoModal');
+            bootstrap.Modal.getInstance(modalEl)?.hide();
         })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                return response.json(); // Assicurati che il server restituisca JSON
-            })
-            .then(data => {
-                loadMusicOptions('/api/canzoni', 'music');
-                hideLoader();
-                // Mostra il toast
-                const toastElement = document.getElementById('successToast');
-                const toast = new bootstrap.Toast(toastElement);
-                toast.show(); // Mostra il toast
-
-            })
-            .catch((error) => {
-                document.getElementById('errorMessage').innerText = "Errore nel caricamento del file, controlla la dimensione(max 10mb) e/o l'estensione(mp3 o wav)";
-                let modal = new bootstrap.Modal(document.getElementById('errorModal'));
-                hideLoader();
-                modal.show(); // Mostra il modale
-            });
-    }
-});
-
-// Seleziona l'elemento genitore che contiene gli elementi con la classe "nameShortcut"
-const parentElement = document.getElementById('main'); // Sostituisci con l'ID del tuo elemento genitore
-
-// Aggiungi l'event listener al genitore
-parentElement.addEventListener('click', e => {
-    // Controlla se il target dell'evento è un bottone all'interno di un elemento con la classe "nameShortcut"
-    if (e.target.tagName === 'BUTTON' && e.target.closest('.nameShortcut')) {
-        // Ottieni il testo del bottone cliccato
-        let buttonId = e.target.id; // ad esempio "benvenuto_fileName0"
-        let fileName = buttonId.split('_').shift();
-
-        // Estrai solo la parte "fileName0"
-        let extractedId = buttonId.split('_').pop(); // Ottiene l'ultimo elemento dell'array
-        document.getElementById(extractedId).value = fileName;
-    }
-});
-
-
-function correctText(text) {
-    text = text.toLowerCase();
-    // Mapping of days of the week to their accented versions
-    const daysOfWeek = {
-        "lunedì": "lunedì",
-        "martedì": "martedì",
-        "mercoledì": "mercoledì",
-        "giovedì": "giovedì",
-        "venerdì": "venerdì",
-        "sabato": "sabato",
-        "domenica": "domenica",
-        "lunedi": "lunedì",
-        "martedi": "martedì",
-        "mercoledi": "mercoledì",
-        "giovedi": "giovedì",
-        "venerdi": "venerdì",
-        "sabato": "sabato",
-        "domenica": "domenica"
-    };
-
-    // Correct the names of the days of the week
-    text = text.replace(/\b(lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)\b/g, (match) => {
-        return daysOfWeek[match];
-    });
-
-    // Correct the time format from "1.30" or "13.30" to "1:30" or "13:30"
-    text = text.replace(/(\d{1,2})[.,](\d{2})/g, '$1:$2');
-
-    // Remove parentheses and their content
-    text = text.replace(/\s*\([^\)]+\)/g, ' ');
-
-    // Replace newlines with a period and a space, ensuring only one period if multiple newlines are present
-    text = text.replace(/\n+/g, '. ');
-
-    // Correct punctuation: replace multiple periods with a single period
-    text = text.replace(/\.{2,}/g, '.'); // Replace multiple periods with a single period
-    text = text.replace(/,{2,}/g, ','); // Replace multiple commas with a single comma
-
-    // Remove excess spaces
-    text = text.replace(/\s+/g, ' '); // Replace multiple spaces with a single space
-    text = text.trim(); // Remove spaces at the beginning and end of the string
-
-    // Manage spaces after punctuation
-    text = text.replace(/\s*([.,])\s*/g, '$1 '); // Remove spaces before punctuation and add a space after
-    text = text.replace(/([.,])\s+/g, '$1 '); // Ensure there is a space after punctuation
-
-    return text.trim(); // Return the corrected text
-}
-
-document.getElementById("main").addEventListener("paste", e => {
-    if (e.target.matches('textarea[id^="messageText"]')) {
-        // Controlla se il testo è già stato incollato
-        if (!e.target.dataset.pasted) {
-            // Usa setTimeout per attendere che il testo venga incollato
-            setTimeout(() => {
-                if (e.target.value !== "") {
-                    let correctedText = correctText(e.target.value);
-                    e.target.value = correctedText;
-                    // Imposta il flag per indicare che il testo è stato incollato
-                    e.target.dataset.pasted = "true";
-                }
-            }, 0);
-        }
-    }
+        .catch(() => {});
 });

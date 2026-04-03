@@ -1,12 +1,12 @@
 'use strict';
 
-// ─── Dipendenze core ────────────────────────────────────────────────────────
+// ─── Dipendenze core ──────────────────────────────────────────────────────────
 const express      = require('express');
 const path         = require('path');
 const fs           = require('fs');
 const { Readable } = require('stream');
 
-// ─── AWS SDK ─────────────────────────────────────────────────────────────────
+// ─── AWS SDK ──────────────────────────────────────────────────────────────────
 const { PollyClient, SynthesizeSpeechCommand } = require('@aws-sdk/client-polly');
 
 // ─── Utility audio ────────────────────────────────────────────────────────────
@@ -19,14 +19,21 @@ const multer       = require('multer');
 const cookieParser = require('cookie-parser');
 const { doubleCsrf } = require('csrf-csrf');
 
-// ─── Moduli interni ───────────────────────────────────────────────────────────
-const { getMp3Files }    = require('./songs/songArray.js');
-const { processMp3File } = require('./audioNormalizer.js');
+// ─── Sicurezza aggiuntiva ─────────────────────────────────────────────────────
+const rateLimit = require('express-rate-limit');
+const helmet    = require('helmet');
 
 // ─── Variabili d'ambiente ─────────────────────────────────────────────────────
 require('dotenv').config({ path: path.join(__dirname, 'env', 'hidden.env') });
 
-// ─── Costanti ─────────────────────────────────────────────────────────────────
+// ─── Moduli interni ───────────────────────────────────────────────────────────
+const { getMp3Files }    = require('./songs/songArray.js');
+const { processMp3File } = require('./audioNormalizer.js');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COSTANTI
+// ─────────────────────────────────────────────────────────────────────────────
+
 const PORT           = process.env.PORT || 3000;
 const IS_PRODUCTION  = process.env.NODE_ENV === 'production';
 const SONGS_DIR      = path.join(__dirname, 'songs');
@@ -37,7 +44,13 @@ const MAX_UPLOAD_MB  = 10;
 const SILENCE_MIX    = path.join(PRIVATE_DIR, 'mixSilence.mp3');
 const SILENCE_START  = path.join(PRIVATE_DIR, 'startSilence.mp3');
 
-// Mappa delle entità HTML da decodificare
+/** Lunghezza massima ammessa per il nome azienda/cartella */
+const MAX_COMPANY_NAME_LEN = 80;
+
+/** Caratteri ammessi nel nome azienda (alfanumerico + spazio trattino underscore punto) */
+const COMPANY_NAME_REGEX = /^[a-zA-Z0-9 \-_.àáèéìíòóùúÀÁÈÉÌÍÒÓÙÚ]+$/;
+
+/** Mappa delle entità HTML da decodificare */
 const HTML_ENTITIES = {
     '&amp;':  '&',
     '&lt;':   '<',
@@ -46,30 +59,48 @@ const HTML_ENTITIES = {
     '&apos;': "'",
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // APP
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 const app = express();
 
-// ─── Middleware di sicurezza ───────────────────────────────────────────────────
+// ─── Helmet: imposta sicuri la maggior parte degli header HTTP ────────────────
+/**
+ * Helmet configura automaticamente header di sicurezza come:
+ * - Strict-Transport-Security (HSTS)
+ * - X-Content-Type-Options: nosniff
+ * - X-DNS-Prefetch-Control
+ * - Referrer-Policy
+ * - Permissions-Policy
+ * La CSP viene configurata manualmente sotto per maggiore controllo.
+ */
+app.use(helmet({
+    contentSecurityPolicy: false, // gestita manualmente
+}));
 
-/** Blocca l'accesso diretto alla directory .git */
+// ─── Rimuove l'header X-Powered-By ───────────────────────────────────────────
+app.disable('x-powered-by');
+
+// ─── Blocca accesso diretto a .git ───────────────────────────────────────────
 app.use((req, res, next) => {
     if (req.path.startsWith('/.git')) return res.status(403).send('Access Denied');
     next();
 });
 
-/** Rimuove l'header X-Powered-By per non rivelare il framework */
-app.disable('x-powered-by');
-
-/** Impedisce l'embedding della pagina in iframe */
+// ─── X-Frame-Options ─────────────────────────────────────────────────────────
 app.use((_req, res, next) => {
     res.setHeader('X-Frame-Options', 'DENY');
     next();
 });
 
-/** Content Security Policy: permette solo risorse da sé stessi e jsdelivr */
+// ─── Content Security Policy ─────────────────────────────────────────────────
+/**
+ * CSP restrittiva:
+ * - Solo risorse da 'self' e jsdelivr.net
+ * - Vieta inline script/style (sicurezza XSS)
+ * - Vieta frame e form verso origini esterne
+ */
 app.use((_req, res, next) => {
     res.setHeader(
         'Content-Security-Policy',
@@ -78,16 +109,20 @@ app.use((_req, res, next) => {
             "script-src 'self' https://cdn.jsdelivr.net",
             "style-src 'self' https://cdn.jsdelivr.net",
             "img-src 'self' data:",
+            "media-src 'self'",
             "frame-ancestors 'none'",
             "form-action 'self'",
+            "base-uri 'self'",
+            "object-src 'none'",
         ].join('; ')
     );
     next();
 });
 
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 /**
- * CORS: accetta richieste solo dall'origine di produzione o da localhost in sviluppo.
- * NOTA: impostare correttamente ALLOWED_ORIGIN in .env in produzione.
+ * Accetta richieste solo dall'origine configurata.
+ * In sviluppo: localhost. In produzione: valore da .env (ALLOWED_ORIGIN).
  */
 const ALLOWED_ORIGINS = IS_PRODUCTION
     ? [process.env.ALLOWED_ORIGIN || 'https://ivr.up.railway.app']
@@ -99,23 +134,50 @@ app.use((req, res, next) => {
         res.setHeader('Access-Control-Allow-Origin', origin);
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
+});
+
+// ─── Rate Limiter globale ─────────────────────────────────────────────────────
+/**
+ * Limita le richieste per IP a 100 ogni 15 minuti.
+ * Protegge contro brute force e flooding.
+ */
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Troppe richieste, riprova tra qualche minuto.' },
+});
+app.use(globalLimiter);
+
+// ─── Rate Limiter per la sintesi vocale (endpoint costoso) ───────────────────
+/**
+ * La sintesi Polly è costosa (tempo + costo AWS).
+ * Limitata a 5 chiamate ogni 10 minuti per IP.
+ */
+const synthesisLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Limite di sintesi raggiunto. Riprova tra 10 minuti.' },
 });
 
 // ─── Middleware generali ──────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' })); // ridotto da 10mb: i payload IVR sono piccoli
 
-// ─── CSRF (Double-Submit Cookie pattern) ──────────────────────────────────────
+// ─── CSRF (Double-Submit Cookie pattern) ─────────────────────────────────────
 const csrf = doubleCsrf({
     getSecret: () => process.env.CSRF_KEY,
     /**
-     * Estrae il token CSRF prima dal body, poi dagli header.
-     * Questo supporta sia form HTML che chiamate fetch/AJAX.
+     * Il token viene letto prima dal body (form HTML),
+     * poi dall'header X-CSRF-Token (fetch/AJAX).
      */
     getTokenFromRequest: (req) => req.body?._csrf || req.headers['x-csrf-token'],
     cookieName: IS_PRODUCTION ? '__Host-prod.x-csrf-token' : '_csrf',
@@ -133,43 +195,57 @@ app.use((req, res, next) => {
     next();
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // UTILITY
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Decodifica le entità HTML più comuni in una stringa.
  * Usato per pulire i testi prima di inviarli ad Amazon Polly.
  *
- * @param {string} text - Testo con eventuali entità HTML
- * @returns {string} Testo con entità decodificate
+ * @param {string} text
+ * @returns {string}
  */
 function decodeHtmlEntities(text) {
     return text.replace(/&(?:amp|lt|gt|quot|apos);/g, (match) => HTML_ENTITIES[match] ?? match);
 }
 
 /**
- * Verifica il token CSRF dalla richiesta.
- * Lancia un errore HTTP 403 se il token non è valido.
+ * Sanifica e valida il nome azienda/cartella.
+ * - Rimuove sequenze di path traversal (../ o ../)
+ * - Rifiuta nomi troppo lunghi
+ * - Accetta solo caratteri alfanumerici, spazio, trattino, underscore, punto e lettere accentate italiane
  *
- * @param {import('express').Request} req
- * @param {import('express').Response} res
- * @returns {boolean} true se valido, false se non valido (con risposta già inviata)
+ * @param {string} name
+ * @returns {{ valid: boolean, sanitized: string }}
  */
-function verifyCsrf(req, res) {
-    const token = req.body?._csrf;
-    if (!token || req.csrfToken() !== token) {
-        res.status(403).json({ error: 'Invalid CSRF token' });
-        return false;
-    }
-    return true;
+function validateCompanyName(name) {
+    if (typeof name !== 'string') return { valid: false, sanitized: '' };
+    const sanitized = name.trim().replace(/\.{2,}/g, '').replace(/[\/\\]/g, '');
+    if (!sanitized || sanitized.length > MAX_COMPANY_NAME_LEN) return { valid: false, sanitized };
+    if (!COMPANY_NAME_REGEX.test(sanitized)) return { valid: false, sanitized };
+    return { valid: true, sanitized };
 }
 
 /**
- * Ottiene la durata in secondi di un singolo file audio tramite ffprobe.
+ * Verifica che un percorso di file sia contenuto all'interno di una
+ * directory base (prevenzione path traversal).
  *
- * @param {string} filePath - Percorso assoluto del file audio
- * @returns {Promise<number>} Durata in secondi (arrotondata per eccesso + 3s di margine)
+ * @param {string} base    - Directory base (assoluta)
+ * @param {string} target  - Percorso da verificare (assoluto)
+ * @returns {boolean}
+ */
+function isPathSafe(base, target) {
+    const resolved = path.resolve(target);
+    return resolved.startsWith(path.resolve(base) + path.sep) ||
+           resolved === path.resolve(base);
+}
+
+/**
+ * Ottiene la durata in secondi di un file audio tramite ffprobe.
+ *
+ * @param {string} filePath
+ * @returns {Promise<number>}
  */
 async function getAudioDuration(filePath) {
     return new Promise((resolve, reject) => {
@@ -184,13 +260,13 @@ async function getAudioDuration(filePath) {
  * Calcola la durata totale di un array di file audio.
  * Aggiunge 2.5 secondi di pausa stimata tra ogni traccia.
  *
- * @param {string[]} audioPaths - Array di percorsi ai file audio
- * @returns {Promise<number>} Durata totale in secondi
+ * @param {string[]} audioPaths
+ * @returns {Promise<number>}
  */
 async function getTotalDuration(audioPaths) {
     let total = 0;
     for (const file of audioPaths) {
-        total += 2.5; // pausa stimata tra i messaggi
+        total += 2.5;
         const meta = await new Promise((resolve, reject) => {
             ffmpeg.ffprobe(file, (err, data) => (err ? reject(err) : resolve(data)));
         });
@@ -199,12 +275,12 @@ async function getTotalDuration(audioPaths) {
     return Math.ceil(total + 3);
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // AMAZON POLLY
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Crea un'istanza configurata di PollyClient usando le credenziali dall'env.
+ * Crea un'istanza configurata di PollyClient.
  *
  * @returns {PollyClient}
  */
@@ -220,13 +296,12 @@ function createPollyClient() {
 
 /**
  * Sintetizza un testo SSML con Amazon Polly e salva l'audio come MP3.
- * Aggiunge il titolo (playButtonId) nei metadati ID3 del file generato.
  *
- * @param {PollyClient} polly      - Client Polly già istanziato
- * @param {string}      ssmlText   - Testo SSML da sintetizzare
- * @param {string}      langCode   - Codice lingua (es. 'it-IT', 'en-US')
- * @param {string}      outputPath - Percorso di destinazione del file MP3
- * @param {string}      trackId    - ID da salvare nel tag ID3 title
+ * @param {PollyClient} polly
+ * @param {string}      ssmlText
+ * @param {string}      langCode
+ * @param {string}      outputPath
+ * @param {string}      trackId
  * @returns {Promise<void>}
  */
 async function synthesizeSpeech(polly, ssmlText, langCode, outputPath, trackId) {
@@ -245,13 +320,11 @@ async function synthesizeSpeech(polly, ssmlText, langCode, outputPath, trackId) 
         throw new Error('AudioStream non è un flusso leggibile.');
     }
 
-    // Scrivi lo stream audio su disco
     await new Promise((resolve, reject) => {
         const writeStream = fs.createWriteStream(outputPath);
         AudioStream.pipe(writeStream);
         writeStream.on('error', reject);
         writeStream.on('finish', () => {
-            // Aggiunge i metadati ID3 dopo la scrittura
             ID3.write({ title: trackId }, outputPath, (err) => {
                 if (err) return reject(err);
                 console.log(`[Polly] Salvato: ${path.basename(outputPath)}`);
@@ -262,11 +335,11 @@ async function synthesizeSpeech(polly, ssmlText, langCode, outputPath, trackId) 
 }
 
 /**
- * Sintetizza tutti i messaggi di un IVR (italiano + inglese se presente).
+ * Sintetizza tutti i messaggi di un IVR.
  *
- * @param {Array<{fileName:string, messageText:string, engMessageText:string|null, playButtonId:string}>} messages
+ * @param {Array} messages
  * @param {PollyClient} polly
- * @param {string}      outputDir - Cartella temporanea dove salvare i file
+ * @param {string} outputDir
  * @returns {Promise<void>}
  */
 async function synthesizeMessages(messages, polly, outputDir) {
@@ -282,23 +355,19 @@ async function synthesizeMessages(messages, polly, outputDir) {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // AUDIO PROCESSING (FFMPEG)
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Opzioni di output audio standard usate in tutte le conversioni ffmpeg.
- * Mono, 44100 Hz, 192 kbps — qualità ottimale per IVR.
- */
+/** Opzioni di output audio standard per tutte le conversioni */
 const FFMPEG_AUDIO_OPTIONS = ['-b:a', '192k', '-ar', '44100', '-ac', '1'];
 
 /**
- * Aggiunge un file di silenzio iniziale (startSilence.mp3) prima dell'audio principale.
- * Il file risultante sovrascrive l'originale nella cartella risultati.
+ * Aggiunge un file di silenzio iniziale prima dell'audio principale.
  *
- * @param {string} tempDir    - Cartella temporanea (per il file intermedio)
- * @param {string} resultsDir - Cartella risultati (dove si trova il file di input)
- * @param {string} fileName   - Nome del file da processare
+ * @param {string} tempDir
+ * @param {string} resultsDir
+ * @param {string} fileName
  * @returns {Promise<void>}
  */
 function addSilenceAtStart(tempDir, resultsDir, fileName) {
@@ -325,14 +394,13 @@ function addSilenceAtStart(tempDir, resultsDir, fileName) {
 
 /**
  * Mixa la traccia vocale TTS con una canzone di sottofondo.
- * La canzone viene ripetuta N volte per coprire tutta la durata del TTS.
  * Il volume della voce è amplificato (3.0x) per garantire la comprensibilità.
  *
- * @param {string} fileName            - Nome file di output
- * @param {string} backgroundSongPath  - Percorso della canzone di sfondo
- * @param {string} resultsDir          - Cartella risultati
- * @param {string} tempDir             - Cartella temporanea
- * @param {number} repeatTimes         - Numero di volte che il brano deve essere ripetuto
+ * @param {string} fileName
+ * @param {string} backgroundSongPath
+ * @param {string} resultsDir
+ * @param {string} tempDir
+ * @param {number} repeatTimes
  * @returns {Promise<void>}
  */
 function mergeWithBackgroundSong(fileName, backgroundSongPath, resultsDir, tempDir, repeatTimes) {
@@ -358,16 +426,15 @@ function mergeWithBackgroundSong(fileName, backgroundSongPath, resultsDir, tempD
 }
 
 /**
- * Taglia il file audio finale alla durata corretta (TTS + 20s di coda).
- * Rimuove eccesso dal brano di sfondo che potrebbe estendersi oltre il messaggio.
+ * Taglia il file audio finale alla durata corretta.
  *
- * @param {number} ttsDuration          - Durata totale del TTS in secondi
- * @param {number} bgLength             - Durata del brano di sfondo in secondi
- * @param {number} bgRepeatTimes        - Numero di ripetizioni del brano
- * @param {string} resultsDir           - Cartella risultati
- * @param {string} fileName             - Nome del file da processare
- * @param {string} tempDir              - Cartella temporanea
- * @returns {Promise<string>}           - Percorso del file finale
+ * @param {number} ttsDuration
+ * @param {number} bgLength
+ * @param {number} bgRepeatTimes
+ * @param {string} resultsDir
+ * @param {string} fileName
+ * @param {string} tempDir
+ * @returns {Promise<string>}
  */
 function saveFinal(ttsDuration, bgLength, bgRepeatTimes, resultsDir, fileName, tempDir) {
     const inputPath  = path.join(resultsDir, fileName);
@@ -381,7 +448,6 @@ function saveFinal(ttsDuration, bgLength, bgRepeatTimes, resultsDir, fileName, t
     return new Promise((resolve, reject) => {
         const cmd = ffmpeg().input(inputPath);
 
-        // Taglia solo se il fondo supera la durata del TTS
         if (bgLength && bgLength * bgRepeatTimes > ttsDuration) {
             cmd.outputOptions('-t', String(ttsDuration + 20));
         }
@@ -397,10 +463,10 @@ function saveFinal(ttsDuration, bgLength, bgRepeatTimes, resultsDir, fileName, t
 }
 
 /**
- * Elimina le cartelle temporanea e risultati dopo il completamento del job.
+ * Elimina le cartelle temporanea e risultati.
  *
- * @param {string} tempDir    - Percorso cartella temporanea
- * @param {string} resultsDir - Percorso cartella risultati
+ * @param {string} tempDir
+ * @param {string} resultsDir
  * @returns {Promise<void>}
  */
 async function cleanupFolders(tempDir, resultsDir) {
@@ -414,16 +480,14 @@ async function cleanupFolders(tempDir, resultsDir) {
 
 /**
  * Comprime tutti i file nella cartella in un archivio ZIP.
- * Se esiste già un file .zip con lo stesso nome, viene sovrascritto.
  *
- * @param {string} folderPath - Percorso della cartella da comprimere
- * @returns {Promise<string>} - Percorso del file ZIP creato
+ * @param {string} folderPath
+ * @returns {Promise<string>}
  */
 async function zipFolder(folderPath) {
-    const folderName   = path.basename(folderPath);
-    const outputZip    = path.join(path.dirname(folderPath), `${folderName}.zip`);
+    const folderName = path.basename(folderPath);
+    const outputZip  = path.join(path.dirname(folderPath), `${folderName}.zip`);
 
-    // Rimuovi ZIP esistente per evitare file corrotti
     if (fs.existsSync(outputZip)) fs.unlinkSync(outputZip);
 
     return new Promise((resolve, reject) => {
@@ -442,11 +506,10 @@ async function zipFolder(folderPath) {
 }
 
 /**
- * Copia un file di canzone dalla directory songs/ alla cartella risultati.
- * Se il file sorgente non esiste, il processo continua senza errori.
+ * Copia una canzone dalla directory songs/ alla cartella risultati.
  *
- * @param {string} src  - Percorso sorgente
- * @param {string} dest - Percorso destinazione
+ * @param {string} src
+ * @param {string} dest
  * @returns {Promise<void>}
  */
 async function copyBackgroundSong(src, dest) {
@@ -464,24 +527,21 @@ async function copyBackgroundSong(src, dest) {
 
 /**
  * Raggruppa i file nella cartella temporanea in oggetti da processare.
- * Ogni oggetto contiene la traccia italiana e (se presente) quella inglese,
- * oltre al nome del file di sfondo trovato nella cartella risultati.
  *
- * @param {string} tempDir    - Cartella temporanea con i file MP3 sintetizzati
- * @param {string} resultsDir - Cartella risultati (per trovare la canzone di sfondo)
- * @returns {Array<{files: string[], outputName: string, backgroundSong: string|null}>}
+ * @param {string} tempDir
+ * @param {string} resultsDir
+ * @returns {Array}
  */
 function categorizeFiles(tempDir, resultsDir) {
     const files     = fs.readdirSync(tempDir);
     const result    = [];
     const processed = new Set();
 
-    // Prima passata: file italiani (senza prefisso 'eng_')
     for (const file of files) {
         if (file.startsWith('eng_') || processed.has(file)) continue;
 
-        const engFile  = `eng_${file}`;
-        const fileObj  = { files: [file], outputName: file, backgroundSong: null };
+        const engFile = `eng_${file}`;
+        const fileObj = { files: [file], outputName: file, backgroundSong: null };
 
         if (files.includes(engFile)) fileObj.files.push(engFile);
 
@@ -493,7 +553,6 @@ function categorizeFiles(tempDir, resultsDir) {
         processed.add(engFile);
     }
 
-    // Seconda passata: file inglesi non ancora abbinati
     for (const file of files) {
         if (!file.startsWith('eng_') || processed.has(file)) continue;
 
@@ -503,12 +562,8 @@ function categorizeFiles(tempDir, resultsDir) {
         if (existing) {
             existing.files.push(file);
         } else {
-            const bgFile  = fs.readdirSync(resultsDir).find(f => f.endsWith('.mp3'));
-            result.push({
-                files:           [file],
-                outputName:      originalFile,
-                backgroundSong:  bgFile || null,
-            });
+            const bgFile = fs.readdirSync(resultsDir).find(f => f.endsWith('.mp3'));
+            result.push({ files: [file], outputName: originalFile, backgroundSong: bgFile || null });
         }
         processed.add(file);
     }
@@ -517,34 +572,24 @@ function categorizeFiles(tempDir, resultsDir) {
 }
 
 /**
- * Orchestra il processo completo di mixaggio audio:
- * 1. Converte/merge le tracce TTS in WAV
- * 2. Aggiunge silenzio iniziale
- * 3. Mixa con la canzone di sfondo
- * 4. Taglia il file finale
- * 5. Crea lo ZIP
- * 6. Pulisce le cartelle temporanee
+ * Orchestra il processo completo di mixaggio audio.
  *
- * @param {Array} inputData     - Array di oggetti categorizzati da categorizeFiles()
- * @param {string} resultsDir   - Cartella risultati
- * @param {string} tempDir      - Cartella temporanea
+ * @param {Array}  inputData
+ * @param {string} resultsDir
+ * @param {string} tempDir
  * @returns {Promise<void>}
  */
 async function mergeAudioFiles(inputData, resultsDir, tempDir) {
     const processFile = async (obj) => {
         if (obj.files.length === 0) return null;
 
-        const outputName       = obj.outputName.replace(/\.(mp3|wav)$/, '') + '.wav';
-        const bgPath           = obj.backgroundSong ? path.join(resultsDir, obj.backgroundSong) : null;
-        const songPaths        = obj.files.map(f => path.join(tempDir, f));
-        const ttsDuration      = await getTotalDuration(songPaths);
-        const bgDuration       = bgPath ? await getAudioDuration(bgPath) : 0;
-        const bgRepeatTimes    = bgDuration ? Math.ceil(ttsDuration / bgDuration) : 0;
+        const outputName    = obj.outputName.replace(/\.(mp3|wav)$/, '') + '.wav';
+        const bgPath        = obj.backgroundSong ? path.join(resultsDir, obj.backgroundSong) : null;
+        const songPaths     = obj.files.map(f => path.join(tempDir, f));
+        const ttsDuration   = await getTotalDuration(songPaths);
+        const bgDuration    = bgPath ? await getAudioDuration(bgPath) : 0;
+        const bgRepeatTimes = bgDuration ? Math.ceil(ttsDuration / bgDuration) : 0;
 
-        /**
-         * Gestisce un singolo file audio senza background:
-         * converte in WAV e aggiunge il silenzio iniziale.
-         */
         const handleSingle = () =>
             new Promise((resolve, reject) => {
                 ffmpeg(songPaths[0])
@@ -560,7 +605,6 @@ async function mergeAudioFiles(inputData, resultsDir, tempDir) {
 
         if (songPaths.length === 1 && !bgPath) return handleSingle();
 
-        // Merge di più tracce (IT + ENG) con silenzio tra i file
         return new Promise((resolve, reject) => {
             const cmd = ffmpeg();
             songPaths.forEach(f => cmd.input(f).input(SILENCE_MIX));
@@ -580,10 +624,8 @@ async function mergeAudioFiles(inputData, resultsDir, tempDir) {
         });
     };
 
-    // Processa tutti i file in parallelo
     const results = (await Promise.all(inputData.map(processFile))).filter(Boolean);
 
-    // Finalizza ogni file (trim) e poi crea lo ZIP
     await Promise.all(
         results.map(({ ttsDuration, bgDuration, bgRepeatTimes, outputName }) =>
             saveFinal(ttsDuration, bgDuration, bgRepeatTimes, resultsDir, outputName, tempDir)
@@ -594,17 +636,16 @@ async function mergeAudioFiles(inputData, resultsDir, tempDir) {
     await cleanupFolders(tempDir, resultsDir);
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // PULIZIA CARTELLE TEMPORANEE ALL'AVVIO
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Elimina tutte le cartelle _temp_* rimaste da sessioni precedenti.
- * Viene eseguita all'avvio del server per garantire uno stato pulito.
  */
 async function cleanupTempFolders() {
     try {
-        const entries = await fs.promises.readdir(__dirname);
+        const entries  = await fs.promises.readdir(__dirname);
         const tempDirs = entries.filter(e => e.startsWith('_temp_'));
         await Promise.all(
             tempDirs.map(dir =>
@@ -621,20 +662,17 @@ async function cleanupTempFolders() {
 
 cleanupTempFolders();
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // UPLOAD / MULTER
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Tipi MIME audio accettati */
 const ALLOWED_AUDIO_MIME = new Set(['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp3', 'audio/mp4']);
-/** Estensioni audio accettate */
 const ALLOWED_AUDIO_EXT  = new Set(['.mp3', '.wav']);
 
 /**
  * Svuota la directory di upload prima di ogni nuovo caricamento.
- * Previene l'accumulo di file e potenziali conflitti di nomi.
  *
- * @param {string} dir - Percorso della cartella da svuotare
+ * @param {string} dir
  */
 function clearUploadDir(dir) {
     if (!fs.existsSync(dir)) return;
@@ -645,13 +683,12 @@ function clearUploadDir(dir) {
 
 /**
  * Sanifica il nome file rimuovendo caratteri non sicuri.
- * Usa solo lettere, cifre, punti e trattini.
  *
  * @param {string} fileName
  * @returns {string}
  */
 function sanitizeFileName(fileName) {
-    return path.basename(fileName).replace(/[^a-zA-Z0-9.-]/g, '_');
+    return path.basename(fileName).replace(/[^a-zA-Z0-9._\-]/g, '_');
 }
 
 /** Configurazione di Multer per il caricamento di file audio */
@@ -674,11 +711,11 @@ const upload = multer({
     },
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // ROUTES
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Fornisce il token CSRF al frontend per includerlo nelle richieste POST */
+/** Fornisce il token CSRF al frontend */
 app.get('/api/csrf-token', (req, res) => {
     res.json({ csrfToken: res.locals.csrfToken });
 });
@@ -688,7 +725,7 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'main.html'));
 });
 
-/** Lista tutti i file MP3 disponibili nella directory songs/ */
+/** Lista tutti i file MP3 disponibili */
 app.get('/api/canzoni', async (req, res) => {
     try {
         const files = await getMp3Files(SONGS_DIR);
@@ -701,27 +738,41 @@ app.get('/api/canzoni', async (req, res) => {
 
 /**
  * POST /api/synthesize
- * Riceve i dati IVR dal frontend, crea la cartella temporanea,
- * salva la trascrizione e avvia la sintesi vocale con Amazon Polly.
+ * Riceve i dati IVR, crea la cartella temporanea e avvia la sintesi Polly.
+ * Rate limited a 5 richieste / 10 min per IP.
  */
-app.post('/api/synthesize', async (req, res) => {
-    if (!verifyCsrf(req, res)) return;
-
+app.post('/api/synthesize', synthesisLimiter, async (req, res) => {
     const { companyName, data } = req.body;
-    if (!companyName || !Array.isArray(data) || data.length === 0) {
-        return res.status(400).json({ error: 'Dati mancanti o non validi.' });
+
+    // Validazione e sanificazione del nome azienda
+    const nameCheck = validateCompanyName(companyName);
+    if (!nameCheck.valid) {
+        return res.status(400).json({ error: 'Nome azienda non valido. Usa solo lettere, numeri, spazi e trattini.' });
+    }
+    const safeName = nameCheck.sanitized;
+
+    if (!Array.isArray(data) || data.length === 0) {
+        return res.status(400).json({ error: 'Array dati vuoto o non valido.' });
     }
 
-    const folderName = `_temp_${companyName}`;
-    const dirPath    = path.normalize(path.join(__dirname, folderName));
+    // Limita il numero massimo di messaggi per prevenire abusi
+    if (data.length > 30) {
+        return res.status(400).json({ error: 'Troppi messaggi (massimo 30).' });
+    }
+
+    // Costruisce il percorso e verifica che sia dentro __dirname (path traversal guard)
+    const folderName = `_temp_${safeName}`;
+    const dirPath    = path.join(__dirname, folderName);
+
+    if (!isPathSafe(__dirname, dirPath)) {
+        return res.status(400).json({ error: 'Percorso non autorizzato.' });
+    }
 
     try {
-        // Rimuovi ed ricrea la cartella temporanea
         await fs.promises.rm(dirPath, { recursive: true, force: true });
         await fs.promises.mkdir(dirPath, { recursive: true });
         console.log(`[Synthesize] Cartella creata: ${folderName}`);
 
-        // Costruisce e salva il file di trascrizione
         const transcription = data.map(({ fileName, messageText, engMessageText }) => [
             `${fileName}:`,
             `IT -> ${decodeHtmlEntities(messageText)}`,
@@ -744,8 +795,8 @@ app.post('/api/synthesize', async (req, res) => {
 
 /**
  * GET /play/:folder/:controllerName
- * Cerca nella cartella temporanea il file audio che corrisponde
- * al controllerName nel tag ID3 title e restituisce il suo URL.
+ * Cerca nella cartella temporanea il file audio che corrisponde al controllerName.
+ * Protetto da path traversal check su entrambi i parametri.
  */
 app.get('/play/:folder/:controllerName', async (req, res) => {
     const { folder, controllerName } = req.params;
@@ -755,7 +806,16 @@ app.get('/play/:folder/:controllerName', async (req, res) => {
         return res.status(400).json({ error: 'Cartella non autorizzata.' });
     }
 
-    const folderPath = path.normalize(path.join(__dirname, folder));
+    // Previeni path traversal nei parametri
+    const safeFolder         = path.basename(folder);
+    const safeControllerName = path.basename(controllerName);
+
+    const folderPath = path.join(__dirname, safeFolder);
+
+    // Verifica che la cartella sia dentro __dirname
+    if (!isPathSafe(__dirname, folderPath)) {
+        return res.status(400).json({ error: 'Percorso non autorizzato.' });
+    }
 
     try {
         const files = await fs.promises.readdir(folderPath);
@@ -763,8 +823,12 @@ app.get('/play/:folder/:controllerName', async (req, res) => {
 
         for (const file of files) {
             const filePath = path.join(folderPath, file);
-            const meta     = ID3.read(filePath);
-            if (meta?.title?.toLowerCase() === controllerName.toLowerCase()) {
+
+            // Verifica che ogni file sia dentro la cartella
+            if (!isPathSafe(folderPath, filePath)) continue;
+
+            const meta = ID3.read(filePath);
+            if (meta?.title?.toLowerCase() === safeControllerName.toLowerCase()) {
                 audioPath = filePath;
                 break;
             }
@@ -774,7 +838,7 @@ app.get('/play/:folder/:controllerName', async (req, res) => {
             return res.status(404).json({ error: 'File audio non trovato.' });
         }
 
-        res.json({ audioUrl: `/${folder}/${path.basename(audioPath)}` });
+        res.json({ audioUrl: `/${safeFolder}/${path.basename(audioPath)}` });
     } catch (err) {
         console.error('[GET /play] Errore:', err);
         res.status(500).json({ error: 'Errore nella ricerca del file audio.' });
@@ -783,27 +847,43 @@ app.get('/play/:folder/:controllerName', async (req, res) => {
 
 /**
  * GET /:folder/:filename
- * Endpoint generico per servire file audio dalle cartelle del progetto.
- * NOTA: in produzione considera di limitare le cartelle accessibili.
+ * Serve file audio dalle cartelle del progetto.
+ * Path traversal guard: il file deve essere dentro __dirname.
  */
 app.get('/:folder/:filename', (req, res) => {
-    const { folder, filename } = req.params;
-    const filePath = path.normalize(path.join(__dirname, folder, filename));
+    const safeFolder   = path.basename(req.params.folder);
+    const safeFilename = path.basename(req.params.filename);
+    const filePath     = path.join(__dirname, safeFolder, safeFilename);
+
+    if (!isPathSafe(__dirname, filePath)) {
+        return res.status(403).send('Access Denied');
+    }
+
     res.sendFile(filePath);
 });
 
 /**
  * POST /delete-audio
- * Elimina uno o più file audio dalla cartella temporanea.
- * Richiede token CSRF valido.
+ * Elimina file audio dalla cartella temporanea.
+ * Path traversal guard su ogni nome file.
  */
 app.post('/delete-audio', async (req, res) => {
-    if (!verifyCsrf(req, res)) return;
-
     const { files, folder } = req.body;
 
     if (!files?.length || files[0] === '.mp3' || !folder) {
         return res.status(400).json({ error: 'Parametri mancanti o non validi.' });
+    }
+
+    // Sanifica il nome della cartella
+    const safeFolder = path.basename(folder);
+    if (!safeFolder.startsWith('_temp_')) {
+        return res.status(400).json({ error: 'Cartella non autorizzata.' });
+    }
+
+    const baseDir = path.join(__dirname, safeFolder);
+
+    if (!isPathSafe(__dirname, baseDir)) {
+        return res.status(400).json({ error: 'Percorso non autorizzato.' });
     }
 
     const deleted = [];
@@ -811,11 +891,20 @@ app.post('/delete-audio', async (req, res) => {
 
     await Promise.allSettled(
         files.map(async (fileName) => {
-            const filePath = path.join(__dirname, folder, fileName);
+            // Sanifica ogni nome file individuale
+            const safeFile = path.basename(String(fileName));
+            const filePath = path.join(baseDir, safeFile);
+
+            // Verifica path traversal per ogni file
+            if (!isPathSafe(baseDir, filePath)) {
+                failed.push(fileName);
+                return;
+            }
+
             try {
                 await fs.promises.unlink(filePath);
-                deleted.push(fileName);
-                console.log(`[Delete] Eliminato: ${fileName}`);
+                deleted.push(safeFile);
+                console.log(`[Delete] Eliminato: ${safeFile}`);
             } catch {
                 failed.push(fileName);
             }
@@ -832,14 +921,18 @@ app.post('/delete-audio', async (req, res) => {
 
 /**
  * POST /upload
- * Carica un file audio, lo normalizza tramite audioNormalizer,
- * e lo salva nella directory songs/ pronto per essere usato come sottofondo.
+ * Carica un file audio, lo normalizza e lo salva in songs/.
  */
 app.post(
     '/upload',
     upload.single('audioFile'),
     async (req, res) => {
         if (!req.file) return res.status(400).json({ error: 'Nessun file caricato.' });
+
+        // Verifica path traversal sul file salvato da multer
+        if (!isPathSafe(UPLOAD_DIR, req.file.path)) {
+            return res.status(400).json({ error: 'Percorso file non autorizzato.' });
+        }
 
         console.log(`[Upload] Ricevuto: ${req.file.originalname}`);
 
@@ -852,7 +945,6 @@ app.post(
             res.status(500).json({ error: 'Errore durante il processamento del file.' });
         }
     },
-    // Gestione errori Multer (dimensione, formato, ecc.)
     (err, req, res, _next) => {
         const message = err instanceof multer.MulterError
             ? err.message
@@ -863,60 +955,63 @@ app.post(
 
 /**
  * POST /api/save
- * Avvia il pipeline completo di mixaggio:
- * 1. Verifica l'esistenza della cartella temporanea
- * 2. Crea la cartella risultati
- * 3. Copia la canzone di sfondo (se selezionata)
- * 4. Mixaggio audio → ZIP
- * 5. Scarica il file ZIP al client
+ * Avvia il pipeline completo di mixaggio e invia il file ZIP al client.
  */
 app.post('/api/save', async (req, res) => {
-    if (!verifyCsrf(req, res)) return;
-
     const { folderName, backgroundSong } = req.body;
 
-    if (!folderName) {
-        return res.status(400).json({ error: 'folderName è obbligatorio.' });
+    // Validazione e sanificazione del nome cartella
+    const nameCheck = validateCompanyName(folderName);
+    if (!nameCheck.valid) {
+        return res.status(400).json({ error: 'Nome cartella non valido.' });
+    }
+    const safeName = nameCheck.sanitized;
+
+    // Validazione canzone di sfondo (solo nome file, nessun path traversal)
+    if (backgroundSong) {
+        const safeSong = path.basename(String(backgroundSong));
+        if (safeSong !== backgroundSong || !safeSong.endsWith('.mp3')) {
+            return res.status(400).json({ error: 'Nome canzone non valido.' });
+        }
     }
 
-    const tempDir    = path.join(__dirname, `_temp_${folderName}`);
-    const resultsDir = path.join(RESULTS_DIR, folderName);
+    const tempDir    = path.join(__dirname, `_temp_${safeName}`);
+    const resultsDir = path.join(RESULTS_DIR, safeName);
+
+    // Path traversal guard su entrambe le cartelle
+    if (!isPathSafe(__dirname, tempDir) || !isPathSafe(RESULTS_DIR, resultsDir)) {
+        return res.status(400).json({ error: 'Percorso non autorizzato.' });
+    }
 
     try {
-        // Verifica che la cartella temporanea esista
         await fs.promises.access(tempDir, fs.constants.F_OK);
 
-        // Ricrea la cartella risultati da zero
         await fs.promises.rm(resultsDir, { recursive: true, force: true });
         await fs.promises.mkdir(resultsDir, { recursive: true });
 
-        // Sposta la trascrizione nella cartella risultati
         await fs.promises.rename(
             path.join(tempDir, 'Trascrizione.txt'),
             path.join(resultsDir, 'Trascrizione.txt')
         );
 
-        // Copia la canzone di sfondo se selezionata
         if (backgroundSong) {
+            const safeSong = path.basename(backgroundSong);
             await copyBackgroundSong(
-                path.join(SONGS_DIR, backgroundSong),
-                path.join(resultsDir, backgroundSong)
+                path.join(SONGS_DIR, safeSong),
+                path.join(resultsDir, safeSong)
             );
         }
 
-        // Avvia il processo di mixaggio
         const inputData = categorizeFiles(tempDir, resultsDir);
         await mergeAudioFiles(inputData, resultsDir, tempDir);
 
-        // Verifica l'esistenza dello ZIP generato
-        const zipPath = path.normalize(path.join(RESULTS_DIR, `${folderName}.zip`));
+        const zipPath = path.join(RESULTS_DIR, `${safeName}.zip`);
         if (!fs.existsSync(zipPath)) {
             return res.status(404).json({ error: 'File ZIP non trovato dopo il processo.' });
         }
 
-        // Invia il file ZIP al client
         res.setHeader('Content-Type', 'application/zip');
-        res.download(zipPath, `${folderName}.zip`, (err) => {
+        res.download(zipPath, `${safeName}.zip`, (err) => {
             if (err) console.error('[Save] Errore invio ZIP:', err);
         });
     } catch (err) {
@@ -925,9 +1020,21 @@ app.post('/api/save', async (req, res) => {
     }
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ─── Gestore errori globale ───────────────────────────────────────────────────
+/**
+ * Intercetta tutti gli errori non gestiti dalle route.
+ * In produzione non rivela dettagli dell'errore al client.
+ */
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+    console.error('[Error]', err);
+    const message = IS_PRODUCTION ? 'Si è verificato un errore interno.' : err.message;
+    res.status(err.status || 500).json({ error: message });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AVVIO SERVER
-// ──────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
     console.log(`[Server] In esecuzione su http://localhost:${PORT}`);
