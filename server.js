@@ -1,234 +1,211 @@
+'use strict';
+
 const express = require('express');
 const path = require('path');
-const { PollyClient, SynthesizeSpeechCommand } = require('@aws-sdk/client-polly');
 const fs = require('fs');
 const { Readable } = require('stream');
-const ID3 = require('node-id3'); //audio metadata
-const cron = require('node-cron');
-const { exec } = require('child_process');
-const fileUpload = require('express-fileupload');
+const { PollyClient, SynthesizeSpeechCommand } = require('@aws-sdk/client-polly');
+const ID3 = require('node-id3');
 const multer = require('multer');
-
-const { getMp3Files } = require('./songs/songArray.js'); // Importa la funzione dal file songArray.js
-const { processMp3File } = require('./audioNormalizer.js'); // 
-
-require('dotenv').config({ path: __dirname + '/env/hidden.env' });
-
-const ffmpeg = require('fluent-ffmpeg');
-
 const archiver = require('archiver');
-
-const { doubleCsrf } = require('csrf-csrf');
+const ffmpeg = require('fluent-ffmpeg');
 const cookieParser = require('cookie-parser');
+const { doubleCsrf } = require('csrf-csrf');
+const { getMp3Files } = require('./songs/songArray.js');
+const { processMp3File } = require('./audioNormalizer.js');
 
+require('dotenv').config({ path: path.join(__dirname, 'env', 'hidden.env') });
 
+// ─────────────────────────────────────────────
+// Constants & Config
+// ─────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+const IS_PROD = process.env.NODE_ENV === 'production';
+const SONGS_DIR = path.join(__dirname, 'songs');
+const RESULTS_DIR = path.join(__dirname, 'results');
+const PRIVATE_DIR = path.join(__dirname, '_private');
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const ALLOWED_AUDIO_MIME = new Set(['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp3', 'audio/mp4']);
+const ALLOWED_AUDIO_EXT = new Set(['.mp3', '.wav']);
+
+// ─────────────────────────────────────────────
+// App Setup
+// ─────────────────────────────────────────────
 const app = express();
 
-// Middleware per il parsing del JSON
-app.use(express.static(path.join(__dirname, 'public')));
-
-
-// Middleware per negare l'accesso alla directory .git
-app.use((req, res, next) => {
-    if (req.path.startsWith('/.git')) {
-        return res.status(403).send('Access Denied');
-    }
-    next();
-});
-
-
-// Middleware to handle CORS
-app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', 'https://ivr.up.railway.app'); // Replace with your frontend domain
-    res.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:3000'); // Replace with your frontend domain
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST'); // Specify allowed methods
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type'); // Specify allowed headers
-
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200); // Respond with 200 OK for OPTIONS requests
-    }
-
-    next(); // Pass to the next middleware
-});
-
-// Disable the X-Powered-By header
 app.disable('x-powered-by');
-
-// Set the X-Frame-Options header
-app.use((req, res, next) => {
-    res.setHeader('X-Frame-Options', 'DENY');
-    next();
-});
-
-// Configure Content Security Policy
-app.use((req, res, next) => {
-    res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:; frame-ancestors 'none'; form-action 'self';");
-    next();
-});
-
-
-const PORT = process.env.PORT;
-
-
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json({ limit: '10mb' }));
 
-/// Configurazione del middleware double-csrf
+// ─────────────────────────────────────────────
+// Security Headers
+// ─────────────────────────────────────────────
+app.use((req, res, next) => {
+    if (req.path.startsWith('/.git')) return res.status(403).send('Access Denied');
+    next();
+});
+
+app.use((req, res, next) => {
+    const origin = IS_PROD ? 'https://ivr.up.railway.app' : 'http://127.0.0.1:3000';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
+    next();
+});
+
+app.use((req, res, next) => {
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:; frame-ancestors 'none'; form-action 'self';"
+    );
+    next();
+});
+
+// ─────────────────────────────────────────────
+// CSRF Protection
+// ─────────────────────────────────────────────
 const csrf = doubleCsrf({
     getSecret: () => process.env.CSRF_KEY,
-    getTokenFromRequest: req => {
-        // Controlla prima nel corpo della richiesta
-        let token = req.body._csrf;
-        // Se non trovato, controlla negli headers
-        if (!token) {
-            token = req.headers['x-csrf-token'];
-        }
-        return token;
-    },
-    cookieName: process.env.NODE_ENV === 'production' ? '__Host-prod.x-csrf-token' : '_csrf',
+    getTokenFromRequest: req => req.body?._csrf || req.headers['x-csrf-token'],
+    cookieName: IS_PROD ? '__Host-prod.x-csrf-token' : '_csrf',
     cookieOptions: {
-        httpOnly: true, // Assicurati che il cookie sia solo HTTP
-        secure: process.env.NODE_ENV === 'production' // Abilita per HTTPS in produzione
+        httpOnly: true,
+        secure: IS_PROD
     }
 });
 
-// Aggiungi il middleware double-csrf e generazione del token
 app.use(csrf.doubleCsrfProtection);
 app.use((req, res, next) => {
     res.locals.csrfToken = csrf.generateToken(req, res);
     next();
 });
 
+// ─────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────
 
-// Rotta per ottenere il token CSRF 
-app.get('/api/csrf-token', (req, res) => {
-    res.json({
-        csrfToken: res.locals.csrfToken
+/** Decode common HTML entities from a string. */
+function decodeHtmlEntities(text) {
+    return text
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
+}
+
+/** Sanitize a file name to contain only safe characters. */
+function sanitizeFileName(fileName) {
+    return path.basename(fileName).replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/** Return true if the mimetype is an allowed audio type. */
+function isAudioFile(file) {
+    return ALLOWED_AUDIO_MIME.has(file.mimetype);
+}
+
+/** Clear all files inside a directory without removing the directory itself. */
+function clearDir(dirPath) {
+    if (!fs.existsSync(dirPath)) return;
+    for (const file of fs.readdirSync(dirPath)) {
+        const fp = path.join(dirPath, file);
+        if (fs.statSync(fp).isFile()) fs.unlinkSync(fp);
+    }
+}
+
+/** Delete a directory and all its contents. */
+async function removeDir(dirPath) {
+    if (fs.existsSync(dirPath)) {
+        await fs.promises.rm(dirPath, { recursive: true, force: true });
+    }
+}
+
+/** Cleanup all _temp_* folders at startup and on demand. */
+function cleanupTempFolders() {
+    fs.readdir(__dirname, (err, files) => {
+        if (err) return console.error('[cleanup] Error reading root dir:', err);
+        const temps = files.filter(f => f.startsWith('_temp_'));
+        Promise.all(temps.map(f => removeDir(path.join(__dirname, f))))
+            .then(() => console.log('[cleanup] Temporary folders cleaned.'))
+            .catch(e => console.error('[cleanup] Error:', e));
     });
+}
+
+/** Get duration (in seconds) of a single audio file via ffprobe. */
+function getDuration(filePath) {
+    return new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(filePath, (err, data) => {
+            if (err) return reject(err);
+            resolve(Math.ceil(data.format.duration + 3));
+        });
+    });
+}
+
+/** Get total duration of an array of audio files plus inter-clip silence gaps. */
+async function getTotalDuration(filePaths) {
+    let total = 0;
+    for (const fp of filePaths) {
+        total += 2.5; // inter-clip silence
+        const dur = await new Promise((resolve, reject) => {
+            ffmpeg.ffprobe(fp, (err, data) => {
+                if (err) return reject(err);
+                resolve(data.format.duration);
+            });
+        });
+        total += dur;
+    }
+    return Math.ceil(total + 3);
+}
+
+// ─────────────────────────────────────────────
+// Routes: CSRF & Static
+// ─────────────────────────────────────────────
+
+app.get('/api/csrf-token', (req, res) => {
+    res.json({ csrfToken: res.locals.csrfToken });
 });
 
-// Rotta principale
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'main.html'));
 });
 
-
-// Percorso della directory da cui leggere i file
-const directoryPath = path.join(__dirname, '/songs'); // Cambia 'filesList' con il percorso della tua directory
-
+// ─────────────────────────────────────────────
+// Route: GET /api/canzoni
+// ─────────────────────────────────────────────
 app.get('/api/canzoni', async (req, res) => {
     try {
-        const mp3Files = await getMp3Files(directoryPath); // Aspetta che l'array di file MP3 sia popolato
-        res.setHeader('Content-Type', 'application/json');
-        res.json(mp3Files); // Restituisce l'array di file MP3 come JSON
+        const mp3Files = await getMp3Files(SONGS_DIR);
+        res.json(mp3Files);
     } catch (error) {
-        console.error('Errore nel recupero delle canzoni:', error);
+        console.error('[/api/canzoni] Error:', error);
         res.status(500).json({ error: 'Errore nel recupero delle canzoni' });
     }
 });
 
+// ─────────────────────────────────────────────
+// AWS Polly – Speech Synthesis
+// ─────────────────────────────────────────────
 
-function decodeHtmlEntities(text) {
-    const parts = text.split(/(&amp;|&lt;|&gt;|&quot;|&apos;)/);
-    for (let i = 0; i < parts.length; i++) {
-        switch (parts[i]) {
-            case '&amp;':
-                parts[i] = '&';
-                break;
-            case '&lt;':
-                parts[i] = '<';
-                break;
-            case '&gt;':
-                parts[i] = '>';
-                break;
-            case '&quot;':
-                parts[i] = '"';
-                break;
-            case '&apos;':
-                parts[i] = "'";
-                break;
-            default:
-                break;
-        }
-    }
-    return parts.join('');
-}
-
-// Rotta per sintetizzare i messaggi
-app.post('/api/synthesize', (req, res) => {
-    // Verifica il token CSRF
-    if (!req.csrfToken() || req.csrfToken() !== req.body._csrf) {
-        return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
-
-    const dataArray = req.body; // Ottieni i dati inviati
-
-    // Crea la cartella per memorizzare i messaggi temporanei
-    const folderName = '_temp_' + dataArray.companyName;
-    const dirPath = path.normalize(path.join(__dirname, folderName));
-
-    fs.rm(dirPath, { recursive: true, force: true }, async (err) => {
-        if (err) {
-            console.error('Errore nella rimozione della cartella:', err);
-            return res.status(500).json({ message: 'Errore durante la rimozione della cartella' });
-        }
-
-        try {
-            // Crea la nuova cartella
-            await fs.promises.mkdir(dirPath, { recursive: true });
-            console.log(`Cartella _temp_"${folderName}" creata con successo`);
-
-            // Crea il contenuto del file di testo
-            let fileContent = '';
-            dataArray.data.forEach(item => {
-                fileContent += `${item.fileName}:\n`;
-                fileContent += `IT -> ${decodeHtmlEntities(item.messageText)}\n`;
-                if (item.engMessageText) {
-                    fileContent += `ENG -> ${decodeHtmlEntities(item.engMessageText)}\n`;
-                }
-                fileContent += `\n`; // linea vuota
-            });
-
-            // Scrittura del file di testo
-            const transcriptionFilePath = path.join(dirPath, 'Trascrizione.txt');
-            await fs.promises.writeFile(transcriptionFilePath, fileContent);
-            console.log('File Trascrizione.txt creato/sovrascritto con successo');
-
-            const polly = new PollyClient({
-                region: 'eu-central-1',
-                credentials: {
-                    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-                    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-                }
-            });
-
-            // Sintetizza i messaggi
-            await synthesizeMessages(dataArray.data, polly, dirPath);
-            res.json({ message: 'Dati ricevuti con successo e audio generato!' });
-        } catch (error) {
-            console.error('Errore durante la sintesi:', error);
-            res.status(500).json({ message: 'Errore durante la sintesi vocale' });
+function createPollyClient() {
+    return new PollyClient({
+        region: 'eu-central-1',
+        credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
         }
     });
-});
-
-// Funzione per sintetizzare i messaggi
-async function synthesizeMessages(messages, polly, dirPath) {
-    for (const item of messages) {
-        const { fileName, messageText, engMessageText, playButtonId } = item;
-
-        // Genera audio in italiano
-        await synthesizeSpeech(polly, `<speak>${messageText}</speak>`, 'it-IT', path.join(dirPath, `${fileName}.mp3`), playButtonId);
-
-        // Genera audio in inglese se non è null
-        if (engMessageText !== null) {
-            await synthesizeSpeech(polly, `<speak>${engMessageText}</speak>`, 'en-US', path.join(dirPath, `eng_${fileName}.mp3`), "ENG" + playButtonId);
-        }
-    }
 }
 
-// Funzione per la sintesi vocale
+/**
+ * Synthesize speech with Amazon Polly and write the MP3 to disk.
+ * Adds the playButtonId as ID3 title tag for later lookup.
+ */
 async function synthesizeSpeech(polly, text, languageCode, outputPath, playButtonId) {
     const params = {
         Text: text,
@@ -239,747 +216,465 @@ async function synthesizeSpeech(polly, text, languageCode, outputPath, playButto
         Engine: 'neural'
     };
 
-    try {
-        const command = new SynthesizeSpeechCommand(params);
-        //console.log(command)
-        const data = await polly.send(command);
-        // Controlla se AudioStream è un flusso
-        if (data.AudioStream instanceof Readable) {
-            const writeStream = fs.createWriteStream(outputPath);
-            data.AudioStream.pipe(writeStream);
+    const data = await polly.send(new SynthesizeSpeechCommand(params));
 
-            // Restituisci una Promise che si risolve quando il flusso di scrittura è completato
-            return new Promise((resolve, reject) => {
-                writeStream.on('finish', () => {
-                    console.log(`File salvato: ${outputPath}`);
-                    const tags = {
-                        title: playButtonId
-                    };
+    if (!(data.AudioStream instanceof Readable)) {
+        throw new Error('AudioStream is not a Readable stream');
+    }
 
-                    ID3.write(tags, outputPath, (err) => {
-                        if (err) {
-                            console.error('Errore durante la scrittura dei metadati:', err);
-                            reject(err); // Rifiuta la Promise in caso di errore
-                        } else {
-                            console.log('Metadati aggiunti con successo! - Audio salvato');
-                            resolve(); // Risolvi la Promise
-                        }
-                    });
-                });
-
-                writeStream.on('error', (err) => {
-                    console.error('Errore durante la scrittura del file:', err);
-                    reject(err); // Rifiuta la Promise in caso di errore
-                });
+    await new Promise((resolve, reject) => {
+        const ws = fs.createWriteStream(outputPath);
+        data.AudioStream.pipe(ws);
+        ws.on('finish', () => {
+            ID3.write({ title: playButtonId }, outputPath, err => {
+                if (err) return reject(err);
+                resolve();
             });
-        } else {
-            console.error('AudioStream non è un flusso:', data);
-            throw new Error('AudioStream non è un flusso');
+        });
+        ws.on('error', reject);
+    });
+
+    console.log(`[polly] Saved: ${outputPath}`);
+}
+
+/** Synthesize all messages in the data array (IT + optional EN). */
+async function synthesizeMessages(messages, polly, dirPath) {
+    for (const { fileName, messageText, engMessageText, playButtonId } of messages) {
+        await synthesizeSpeech(
+            polly,
+            `<speak>${messageText}</speak>`,
+            'it-IT',
+            path.join(dirPath, `${fileName}.mp3`),
+            playButtonId
+        );
+
+        if (engMessageText !== null) {
+            await synthesizeSpeech(
+                polly,
+                `<speak>${engMessageText}</speak>`,
+                'en-US',
+                path.join(dirPath, `eng_${fileName}.mp3`),
+                `ENG${playButtonId}`
+            );
         }
-    } catch (error) {
-        console.error('Errore nella sintesi vocale:', error);
-        throw error; // Propaga l'errore
     }
 }
 
-app.get('/play/:folder/:controllerName', async (req, res) => {
-    const folderName = req.params.folder;
-    const controllerName = req.params.controllerName;
+// ─────────────────────────────────────────────
+// Route: POST /api/synthesize
+// ─────────────────────────────────────────────
+app.post('/api/synthesize', async (req, res) => {
+    const dataArray = req.body;
+    const rawName = dataArray.companyName;
 
-    // Controllo se il nome della cartella inizia con "_temp_"
-
-    if (!folderName.startsWith('_temp_')) {
-        return res.status(400).send('Forbidden');
+    if (!rawName || typeof rawName !== 'string') {
+        return res.status(400).json({ error: 'companyName is required' });
     }
-    const songsDir = path.normalize(path.join(__dirname, folderName));
-    //console.log(songsDir);
-    let songPath = null;
 
-    // Leggi i file nella cartella specificata
-    fs.readdir(songsDir, async (err, files) => {
-        if (err) {
-            return res.status(500).send('Errore nella lettura della cartella.');
-        }
+    const safeName = sanitizeFileName(rawName);
+    const dirPath = path.join(__dirname, `_temp_${safeName}`);
 
-        // Trova la canzone con il titolo specificato
+    try {
+        await removeDir(dirPath);
+        await fs.promises.mkdir(dirPath, { recursive: true });
+
+        // Write transcription file
+        const lines = dataArray.data.map(item => {
+            let entry = `${item.fileName}:\nIT -> ${decodeHtmlEntities(item.messageText)}\n`;
+            if (item.engMessageText) entry += `ENG -> ${decodeHtmlEntities(item.engMessageText)}\n`;
+            return entry;
+        });
+        await fs.promises.writeFile(path.join(dirPath, 'Trascrizione.txt'), lines.join('\n'));
+
+        const polly = createPollyClient();
+        await synthesizeMessages(dataArray.data, polly, dirPath);
+
+        res.json({ message: 'Audio generato con successo!' });
+    } catch (error) {
+        console.error('[/api/synthesize] Error:', error);
+        res.status(500).json({ message: 'Errore durante la sintesi vocale' });
+    }
+});
+
+// ─────────────────────────────────────────────
+// Route: GET /play/:folder/:controllerName
+// ─────────────────────────────────────────────
+app.get('/play/:folder/:controllerName', async (req, res) => {
+    const { folder, controllerName } = req.params;
+
+    if (!folder.startsWith('_temp_')) {
+        return res.status(400).json({ error: 'Invalid folder' });
+    }
+
+    const songsDir = path.normalize(path.join(__dirname, folder));
+
+    try {
+        const files = await fs.promises.readdir(songsDir);
+        let songPath = null;
+
         for (const file of files) {
-            const filePath = path.join(songsDir, file);
+            const fp = path.join(songsDir, file);
             try {
-                const metadata = ID3.read(filePath);
-                if (metadata && metadata.title && metadata.title.toLowerCase() === controllerName.toLowerCase()) {
-                    songPath = filePath;
+                const meta = ID3.read(fp);
+                if (meta?.title?.toLowerCase() === controllerName.toLowerCase()) {
+                    songPath = fp;
                     break;
                 }
-            } catch (error) {
-                console.error(`Errore nella lettura dei metadati per ${file}:`, error);
-            }
+            } catch {/* skip unreadable files */}
         }
 
-        if (!songPath) {
-            return res.status(404).send('Canzone non trovata.');
-        }
+        if (!songPath) return res.status(404).json({ error: 'Audio not found' });
 
-        // Invia l'URL della canzone al client per la riproduzione
-        res.json({ audioUrl: `/songs/${folderName}/${path.basename(songPath)}` });
-    });
+        res.json({ audioUrl: `/${folder}/${path.basename(songPath)}` });
+    } catch (error) {
+        console.error('[/play] Error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
 });
 
-
-// Endpoint per servire file audio
+// ─────────────────────────────────────────────
+// Route: GET /:folder/:filename  (audio file serving)
+// ─────────────────────────────────────────────
 app.get('/:folder/:filename', (req, res) => {
     const { folder, filename } = req.params;
-    const filePath = path.normalize(path.join(__dirname, folder, filename));
-    res.sendFile(filePath);
+    const safePath = path.normalize(path.join(__dirname, folder, filename));
+    // Prevent path traversal
+    if (!safePath.startsWith(__dirname)) return res.status(403).send('Forbidden');
+    res.sendFile(safePath);
 });
 
-app.post('/delete-audio', (req, res) => {
-    // Verifica il token CSRF
-    if (!req.csrfToken() || req.csrfToken() !== req.body._csrf) {
-        return res.status(403).json({ error: 'Invalid CSRF token' });
+// ─────────────────────────────────────────────
+// Route: POST /delete-audio
+// ─────────────────────────────────────────────
+app.post('/delete-audio', async (req, res) => {
+    const { files, folder } = req.body;
+
+    if (!files?.length || files[0] === '.mp3' || !folder) {
+        return res.status(400).json({ error: 'Missing files or folder' });
     }
-    const { files, folder } = req.body; // Ottieni i file e la cartella
-    if (!files || files.length === 0 || files[0] === ".mp3" || !folder) {
-        return res.status(400).send('Nessun file specificato o cartella mancante.');
+
+    const deleted = [];
+    const failed = [];
+
+    await Promise.all(
+        files.map(async fileName => {
+            const fp = path.join(__dirname, folder, fileName);
+            try {
+                await fs.promises.unlink(fp);
+                deleted.push(fileName);
+            } catch {
+                failed.push(fileName);
+            }
+        })
+    );
+
+    if (failed.length > 0) {
+        return res.status(500).json({ message: 'Some files could not be deleted', deleted, failed });
     }
-
-    const deletedFiles = [];
-    const failedFiles = [];
-    let pendingOperations = files.length;
-
-    files.forEach(fileName => {
-        const filePath = path.join(__dirname, folder, fileName); // Usa il percorso della cartella
-
-        fs.unlink(filePath, (err) => {
-            if (err) {
-                //console.error(`Errore durante l'eliminazione di ${fileName}:`, err);
-                failedFiles.push(fileName);
-            } else {
-                console.log(`File ${fileName} eliminato con successo.`);
-                deletedFiles.push(fileName);
-            }
-
-            pendingOperations--;
-
-            if (pendingOperations === 0) {
-                // Tutte le operazioni di eliminazione sono state completate
-                if (failedFiles.length > 0) {
-                    return res.status(500).send({
-                        message: 'Alcuni file non sono stati eliminati.',
-                        deletedFiles,
-                        failedFiles
-                    });
-                } else {
-                    return res.status(200).send({
-                        message: 'Richiesta di eliminazione completata.',
-                        deletedFiles
-                    });
-                }
-            }
-        });
-    });
+    res.json({ message: 'Files deleted successfully', deleted });
 });
 
+// ─────────────────────────────────────────────
+// Audio Processing – Merge / Save Pipeline
+// ─────────────────────────────────────────────
 
-
-
-// Funzione per pulire le cartelle temporanee
-const cleanupTempFolders = () => {
-    const tempFolderPath = path.join(__dirname); // Modifica se necessario
-
-    fs.readdir(tempFolderPath, (err, files) => {
-        if (err) {
-            console.error('Errore nella lettura della cartella:', err);
-            return;
-        }
-
-        const tempFolders = files.filter(file => file.startsWith('_temp_'));
-
-        const deletePromises = tempFolders.map(folder => {
-            return new Promise((resolve, reject) => {
-                const folderPath = path.join(tempFolderPath, folder);
-                fs.rm(folderPath, { recursive: true, force: true }, (err) => {
-                    if (err) {
-                        console.error(`Errore durante l'eliminazione della cartella ${folder}:`, err);
-                        reject(err);
-                    } else {
-                        //console.log(`Cartella ${folder} eliminata con successo.`);
-                        resolve();
-                    }
-                });
-            });
-        });
-
-        Promise.all(deletePromises)
-            .then(() => console.log('Pulizia delle cartelle temporanee completata.'))
-            .catch(() => console.error('Errore durante la pulizia delle cartelle temporanee.'));
-    });
-};
-cleanupTempFolders();
-
-
-// Pianifica il riavvio del server ogni giorno a mezzogiorno
-/*cron.schedule('0 0 * * *', () => {
-    console.log('Riavvio del server programmato...');
-    exec('pm2 restart IVR_server', (err, stdout, stderr) => {
-        if (err) {
-            console.error(`Errore: ${err}`);
-            return;
-        }
-        console.log(`Stdout: ${stdout}`);
-        console.error(`Stderr: ${stderr}`);
-    });
-});
-*/
-
-// Endpoint per ricevere folderName e backgroundSong
-async function copyBackgroundSong(sourceFilePath, destFilePath) {
+/** Copy a file only if it exists; silently skip if missing. */
+async function copyIfExists(src, dest) {
     try {
-        // Verifica se il file esiste prima di copiarlo
-        await fs.promises.access(sourceFilePath, fs.constants.F_OK);
-
-        // Copia il file
-        await fs.promises.copyFile(sourceFilePath, destFilePath);
-        //console.log(`File copiato con successo da ${sourceFilePath} a ${destFilePath}`);
+        await fs.promises.access(src, fs.constants.F_OK);
+        await fs.promises.copyFile(src, dest);
     } catch (err) {
-        // Se il file non esiste, non bloccare l'esecuzione
-        if (err.code === 'ENOENT') {
-            console.warn(`Il file ${sourceFilePath} non esiste. Copia non eseguita.`);
-        } else {
-            console.error(`Errore nella copia del file: ${err.message}`);
-        }
+        if (err.code !== 'ENOENT') throw err;
+        console.warn(`[copyIfExists] File not found, skipping: ${src}`);
     }
 }
 
+/**
+ * Group temp files into objects: { files[], outputName, backgroundSong }.
+ * Italian + optional English versions are paired under the same output.
+ */
 function categorizeFiles(tempFolderPath, resultsFolderPath) {
-    const files = fs.readdirSync(tempFolderPath);
-    const resultArray = [];
-    const checkedFiles = new Set();
+    const files = fs.readdirSync(tempFolderPath).filter(f => f.endsWith('.mp3'));
+    const result = [];
+    const handled = new Set();
+    const bgFile = fs.readdirSync(resultsFolderPath).find(f => f.endsWith('.mp3')) || null;
 
     for (const file of files) {
-        if (!file.startsWith('eng_') && !checkedFiles.has(file)) {
-            const relatedFile = `eng_${file}`;
-            const fileObject = { files: [file], outputName: file, backgroundSong: null };
-
-            if (files.includes(relatedFile)) {
-                fileObject.files.push(relatedFile);
-                fileObject.outputName = fileObject.outputName;
-            }
-
-            // Controlla se esiste un file .mp3 nella cartella resultsFolderPath
-            const backgroundFile = fs.readdirSync(resultsFolderPath).find(f => f.endsWith('.mp3'));
-            if (backgroundFile) {
-                fileObject.backgroundSong = backgroundFile;
-            }
-
-            resultArray.push(fileObject);
-            checkedFiles.add(file);
-            checkedFiles.add(relatedFile);
-        }
-    }
-
-    for (const file of files) {
-        if (file.startsWith('eng_') && !checkedFiles.has(file)) {
-            const originalFile = file.slice(4);
-            const existingObject = resultArray.find(obj => obj.files.includes(originalFile));
-
-            if (existingObject) {
-                existingObject.files.push(file);
-            } else {
-                const fileObject = { files: [file], outputName: originalFile, backgroundSong: null };
-
-                // Controlla se esiste un file .mp3 nella cartella resultsFolderPath
-                const backgroundFile = fs.readdirSync(resultsFolderPath).find(f => f.endsWith('.mp3'));
-                if (backgroundFile) {
-                    fileObject.backgroundSong = backgroundFile;
-                }
-
-                resultArray.push(fileObject);
-            }
-
-            checkedFiles.add(file);
-        }
-    }
-
-    return resultArray;
-}
-
-
-
-
-
-async function mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath) {
-    const silencePath = path.join('_private', 'mixSilence.mp3'); // Path to silence file
-
-    const promises = inputData.map(async (obj) => {
-        let outputName = obj.outputName.replace(/\.(mp3|wav)$/, '') + '.wav';
-        let backgroundSongPath = obj.backgroundSong ? path.join(resultsFolderPath, obj.backgroundSong) : null;
-        let songsArray = obj.files;
-
-        if (songsArray.length === 0) {
-            console.log('No audio files to process for:', obj.outputName);
-            return null; // Skip if no audio files
-        }
-
-        const songPaths = songsArray.map(song => path.join(tempFolderPath, song));
-        const TTSduration = await getTotalDuration(songPaths);
-        let backgroundLength = backgroundSongPath ? await getDuration(backgroundSongPath) : 0;
-        let backgroundRepeatTimes = Math.ceil(TTSduration / backgroundLength);
-
-        // Function to handle single audio file
-        const handleSingleAudioFile = async (originalFilePath) => {
-            const newFilePath = path.join(resultsFolderPath, outputName);
-            return new Promise((resolve, reject) => {
-                ffmpeg(originalFilePath)
-                    .outputOptions('-b:a', '192k')
-                    .outputOptions('-ar', '44100')
-                    .outputOptions('-ac', '1')
-                    .toFormat('wav')
-                    .save(newFilePath)
-                    .on('end', async () => {
-                        console.log('File converted to WAV and moved successfully:', newFilePath);
-                        await addSilenceAtStart(tempFolderPath, resultsFolderPath, outputName);
-                        resolve({ TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath });
-                    })
-                    .on('error', (err) => {
-                        console.error('Error converting file:', err);
-                        reject(err);
-                    });
-            });
+        if (file.startsWith('eng_') || handled.has(file)) continue;
+        const eng = `eng_${file}`;
+        const entry = {
+            files: files.includes(eng) ? [file, eng] : [file],
+            outputName: file,
+            backgroundSong: bgFile
         };
-
-        // If a single audio file without background, handle it
-        if (songsArray.length === 1 && !backgroundSongPath) {
-            return handleSingleAudioFile(path.join(tempFolderPath, songsArray[0]));
-        }
-
-        try {
-            // Create a command to merge audio files
-            const command = ffmpeg();
-            songPaths.forEach(file => {
-                command.input(file).input(silencePath);
-            });
-
-            return new Promise((resolve, reject) => {
-                command
-                    .on('end', async () => {
-                        await addSilenceAtStart(tempFolderPath, resultsFolderPath, outputName);
-                        if (backgroundSongPath) {
-                            await mergeWithBackgroundSong(outputName, backgroundSongPath, resultsFolderPath, tempFolderPath, backgroundRepeatTimes);
-                        }
-                        resolve({ TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath });
-                    })
-                    .on('error', (err) => {
-                        console.error('Error during merging:', err);
-                        reject(err);
-                    })
-                    .outputOptions('-b:a', '192k')
-                    .outputOptions('-ar', '44100')
-                    .outputOptions('-ac', '1')
-                    .toFormat('wav')
-                    .mergeToFile(path.join(resultsFolderPath, outputName), tempFolderPath);
-
-                console.log('Audio files merging initiated:', path.join(resultsFolderPath, outputName));
-            });
-        } catch (error) {
-            console.error('Error during the merging process:', error);
-            throw error;
-        }
-    });
-
-    // Await all promises and gather results
-    // Await all promises and gather results
-    try {
-        const results = await Promise.all(promises);
-
-        // Filter out null results (for cases where there were no audio files)
-        const validResults = results.filter(result => result !== null);
-
-        // Call saveFinal for each valid result and collect the promises
-        const saveFinalPromises = validResults.map(({ TTSduration, backgroundLength, backgroundRepeatTimes, outputName, backgroundSongPath }) => {
-            return saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath);
-        });
-
-        // Wait for all saveFinal calls to complete
-        await Promise.all(saveFinalPromises);
-
-        // Now call zipFolder after all saveFinal calls have finished
-        const zipOutputPath = await zipFolder(resultsFolderPath);
-
-        // Clean up temporary folders after zipping
-        await cleanupFolders(tempFolderPath, resultsFolderPath);
-
-    } catch (error) {
-        console.error('One or more merging processes failed:', error);
+        result.push(entry);
+        handled.add(file);
+        handled.add(eng);
     }
+
+    // Orphan eng_ files (no matching IT version)
+    for (const file of files) {
+        if (file.startsWith('eng_') && !handled.has(file)) {
+            result.push({ files: [file], outputName: file.slice(4), backgroundSong: bgFile });
+            handled.add(file);
+        }
+    }
+
+    return result;
 }
-// Function to trim audioFile and save all files in a .zip archive
-async function saveFinal(TTSduration, backgroundLength, backgroundRepeatTimes, resultsFolderPath, outputName, tempFolderPath) {
-    const inputFilePath = path.join(resultsFolderPath, outputName);
 
-    // Check if the input file exists
-    if (!fs.existsSync(inputFilePath)) {
-        throw new Error(`Input file does not exist: ${inputFilePath}`);
-    }
-
-    let command = ffmpeg();
-    const tempOutputName = `temp_${outputName}`;
-
-    command.input(inputFilePath);
-
-    if (backgroundLength && backgroundLength * backgroundRepeatTimes > TTSduration) {
-        command.outputOptions('-t', TTSduration + 20); // Set trim duration
-    }
-
-    command.mergeToFile(path.join(tempFolderPath, tempOutputName), tempFolderPath);
+/** Prepend a short silence to the beginning of an audio file. */
+function addSilenceAtStart(tempDir, resultsDir, outputName) {
+    const silenceFile = path.join(PRIVATE_DIR, 'startSilence.mp3');
+    const primary = path.join(resultsDir, outputName);
+    const temp = path.join(tempDir, `longer_${outputName}`);
 
     return new Promise((resolve, reject) => {
-        command
-            .on('end', async () => {
-                const finalOutputPath = path.join(resultsFolderPath, outputName);
-                fs.renameSync(path.join(tempFolderPath, tempOutputName), finalOutputPath);
-                resolve(finalOutputPath); // Resolve with the final output path
+        ffmpeg()
+            .input(silenceFile)
+            .input(primary)
+            .complexFilter(['[0:a][1:a]concat=n=2:v=0:a=1[out]'])
+            .outputOptions('-map', '[out]')
+            .save(temp)
+            .on('end', () => {
+                fs.rename(temp, primary, err => {
+                    if (err) return reject(err);
+                    resolve();
+                });
             })
-            .on('error', (err) => {
-                console.error('Error during saving final:', err);
-                reject(err);
-            });
+            .on('error', reject);
     });
 }
 
-
-async function cleanupFolders(tempFolderPath, resultsFolderPath) {
-    if (fs.existsSync(tempFolderPath)) {
-        await fs.promises.rm(tempFolderPath, { recursive: true, force: true });
-        console.log(`Deleted temporary folder: ${tempFolderPath}`);
-    }
-
-    if (fs.existsSync(resultsFolderPath)) {
-        await fs.promises.rm(resultsFolderPath, { recursive: true, force: true });
-        console.log(`Deleted results folder: ${resultsFolderPath}`);
-    }
-}
-
-
-
-
-async function zipFolder(folderPath) {
-    const folderName = path.basename(folderPath);
-    const outputZipPath = path.join(path.dirname(folderPath), `${folderName}.zip`);
-
-    console.log(`Attempting to zip folder: ${folderPath}`);
-
-    if (fs.existsSync(outputZipPath)) {
-        console.log(`Deleting existing zip file: ${outputZipPath}`);
-        fs.unlinkSync(outputZipPath);
-    }
+/** Mix primary voice audio with a looping background music track. */
+function mergeWithBackgroundSong(outputName, bgPath, resultsDir, tempDir, repeatTimes) {
+    const primary = path.join(resultsDir, outputName);
+    const temp = path.join(tempDir, `merged_${outputName}`);
 
     return new Promise((resolve, reject) => {
-        const output = fs.createWriteStream(outputZipPath);
+        ffmpeg()
+            .input(bgPath).inputOption(`-stream_loop ${repeatTimes - 1}`)
+            .input(primary)
+            .complexFilter('[0:a]anull[a0];[1:a]volume=3.0[a1];[a0][a1]amix=inputs=2:duration=longest[a]')
+            .outputOptions('-map', '[a]')
+            .save(temp)
+            .on('end', () => {
+                fs.rename(temp, primary, err => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            })
+            .on('error', reject);
+    });
+}
+
+/** Trim the final file so it matches the TTS duration + small buffer. */
+function saveFinal(TTSduration, bgLength, bgRepeat, resultsDir, outputName, tempDir) {
+    const input = path.join(resultsDir, outputName);
+    const temp = path.join(tempDir, `temp_${outputName}`);
+
+    return new Promise((resolve, reject) => {
+        const cmd = ffmpeg().input(input);
+        if (bgLength && bgLength * bgRepeat > TTSduration) {
+            cmd.outputOptions('-t', TTSduration + 20);
+        }
+        cmd.mergeToFile(temp, tempDir)
+            .on('end', () => {
+                fs.renameSync(temp, path.join(resultsDir, outputName));
+                resolve(path.join(resultsDir, outputName));
+            })
+            .on('error', reject);
+    });
+}
+
+/** Merge all audio files for one entry, apply silence and optional BG music. */
+async function mergeEntry(obj, resultsDir, tempDir) {
+    const silencePath = path.join(PRIVATE_DIR, 'mixSilence.mp3');
+    const outputName = obj.outputName.replace(/\.(mp3|wav)$/i, '') + '.wav';
+    const bgPath = obj.backgroundSong ? path.join(resultsDir, obj.backgroundSong) : null;
+    const songPaths = obj.files.map(f => path.join(tempDir, f));
+
+    if (songPaths.length === 0) return null;
+
+    const TTSduration = await getTotalDuration(songPaths);
+    const bgLength = bgPath ? await getDuration(bgPath) : 0;
+    const bgRepeat = bgLength ? Math.ceil(TTSduration / bgLength) : 0;
+
+    const outPath = path.join(resultsDir, outputName);
+
+    if (songPaths.length === 1 && !bgPath) {
+        // Single track, no background – just convert to WAV
+        await new Promise((resolve, reject) => {
+            ffmpeg(songPaths[0])
+                .outputOptions('-b:a', '192k', '-ar', '44100', '-ac', '1')
+                .toFormat('wav')
+                .save(outPath)
+                .on('end', resolve)
+                .on('error', reject);
+        });
+    } else {
+        const cmd = ffmpeg();
+        for (const fp of songPaths) {
+            cmd.input(fp).input(silencePath);
+        }
+        await new Promise((resolve, reject) => {
+            cmd
+                .outputOptions('-b:a', '192k', '-ar', '44100', '-ac', '1')
+                .toFormat('wav')
+                .mergeToFile(outPath, tempDir)
+                .on('end', resolve)
+                .on('error', reject);
+        });
+    }
+
+    await addSilenceAtStart(tempDir, resultsDir, outputName);
+
+    if (bgPath) {
+        await mergeWithBackgroundSong(outputName, bgPath, resultsDir, tempDir, bgRepeat);
+    }
+
+    return { TTSduration, bgLength, bgRepeat, outputName, bgPath };
+}
+
+/** Run the full merge pipeline for all entries, then zip results. */
+async function mergeAudioFiles(inputData, resultsDir, tempDir) {
+    const results = await Promise.all(inputData.map(obj => mergeEntry(obj, resultsDir, tempDir)));
+    const valid = results.filter(Boolean);
+
+    await Promise.all(
+        valid.map(({ TTSduration, bgLength, bgRepeat, outputName }) =>
+            saveFinal(TTSduration, bgLength, bgRepeat, resultsDir, outputName, tempDir)
+        )
+    );
+
+    const zipPath = await zipFolder(resultsDir);
+    await removeDir(tempDir);
+    await removeDir(resultsDir);
+    return zipPath;
+}
+
+/** Zip a folder and return the output zip path. */
+function zipFolder(folderPath) {
+    const zipPath = path.join(path.dirname(folderPath), `${path.basename(folderPath)}.zip`);
+
+    if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+
+    return new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(zipPath);
         const archive = archiver('zip', { zlib: { level: 9 } });
 
-        output.on('close', () => {
-            console.log(`Zipped ${archive.pointer()} total bytes`);
-            console.log(`Zip file created at: ${outputZipPath}`);
-            resolve(outputZipPath);
-        });
-
-        archive.on('error', (err) => {
-            console.error('Archive error:', err);
-            reject(err);
-        });
-
-        archive.pipe(output);
+        out.on('close', () => resolve(zipPath));
+        archive.on('error', reject);
+        archive.pipe(out);
         archive.directory(folderPath, false);
-
-        console.log('Finalizing the archive...');
         archive.finalize();
     });
 }
 
-
-
-function addSilenceAtStart(tempFolderPath, resultsFolderPath, outputName) {
-    const tempOutputPath = path.join(tempFolderPath, `longer_${outputName}`); // Usa un nome diverso per l'output
-    return new Promise((resolve, reject) => {
-        ffmpeg()
-            .input('_private/startSilence.mp3') // Il file audio da aggiungere
-            .input(path.join(resultsFolderPath, outputName)) // Il file audio principale
-            .complexFilter([
-                '[0:a][1:a]concat=n=2:v=0:a=1[out]' // Concatenazione delle tracce audio
-            ])
-            .outputOptions('-map', '[out]') // Mappatura dell'output
-            .save(tempOutputPath, tempFolderPath) // Merge to a temporary file
-            .on('end', () => {
-                //console.log('Elaborazione completata!');
-
-                // Move the merged file to the results folder with the original output name
-                fs.rename(tempOutputPath, path.join(resultsFolderPath, outputName), (err) => {
-                    if (err) {
-                        console.error('Error moving the merged file:', err);
-                        reject(err);
-                    } else {
-                        //console.log('Merged file moved successfully to results folder.');
-                        resolve();
-                    }
-                });
-            })
-            .on('error', (err) => {
-                console.error('Si è verificato un errore: ' + err.message);
-                reject(err);
-            });
-    });
-}
-
-
-function mergeWithBackgroundSong(outputName, backgroundSongPath, resultsFolderPath, tempFolderPath, backgroundRepeatTimes) {
-    const command = ffmpeg();
-    const primaryAudioPath = path.join(resultsFolderPath, outputName);
-    const tempOutputPath = path.join(tempFolderPath, `merged_${outputName}`);
-
-    // Preparare il brano di sottofondo in modo che venga ripetuto
-    command.input(backgroundSongPath).inputOption(`-stream_loop ${backgroundRepeatTimes - 1}`);
-
-    return new Promise((resolve, reject) => {
-        command
-            .input(primaryAudioPath)
-            .complexFilter(`[0:a]anull[a0];[1:a]volume=3.0[a1];[a0][a1]amix=inputs=2:duration=longest[a]`) // Assicurati che il numero di input sia corretto
-            .outputOptions('-map', '[a]')
-            .save(tempOutputPath)
-            .on('end', () => {
-                fs.rename(tempOutputPath, path.join(resultsFolderPath, outputName), (err) => {
-                    if (err) {
-                        console.error('Error moving the merged file:', err);
-                        reject(err);
-                    } else {
-                        resolve();
-                    }
-                });
-            })
-            .on('error', (err) => {
-                console.error('Si è verificato un errore: ' + err.message);
-                reject(err);
-            });
-    });
-}
-
-
-
-
-async function getTotalDuration(audioFiles) {
-    let totalDuration = 0;
-
-    for (const file of audioFiles) {
-        totalDuration += 2.5;
-        const metadata = await new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(`${file}`, (err, data) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(data);
-                }
-            });
-        });
-
-        totalDuration += metadata.format.duration;
-    }
-
-    return Math.ceil(totalDuration + 3);
-
-}
-
-async function getDuration(file) {
-    let duration = 0;
-    const metadata = await new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(`${file}`, (err, data) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve(data);
-            }
-        });
-    });
-
-    duration = metadata.format.duration;
-
-
-    return Math.ceil(duration + 3);
-
-
-}
-
-
-
-
-
-
+// ─────────────────────────────────────────────
+// Route: POST /api/save
+// ─────────────────────────────────────────────
 app.post('/api/save', async (req, res) => {
-    // Verifica il token CSRF
-    if (!req.csrfToken() || req.csrfToken() !== req.body._csrf) {
-        return res.status(403).json({ error: 'Invalid CSRF token' });
-    }
     const { folderName, backgroundSong } = req.body;
 
-    if (!folderName) {
+    if (!folderName || typeof folderName !== 'string') {
         return res.status(400).json({ error: 'folderName is required' });
     }
 
-
-    const tempFolderPath = path.join(__dirname, `_temp_${folderName}`);
-    const resultsFolderPath = path.join(__dirname, 'results', folderName);
-
+    const safeName = sanitizeFileName(folderName);
+    const tempDir = path.join(__dirname, `_temp_${safeName}`);
+    const resultsDir = path.join(RESULTS_DIR, safeName);
 
     try {
-        // Verify if the temporary folder exists
-        await fs.promises.access(tempFolderPath, fs.constants.F_OK);
+        await fs.promises.access(tempDir, fs.constants.F_OK);
 
-        // If the results folder exists, remove it
-        await fs.promises.rm(resultsFolderPath, { recursive: true, force: true });
+        await removeDir(resultsDir);
+        await fs.promises.mkdir(resultsDir, { recursive: true });
 
-        // Create the results folder
-        await fs.promises.mkdir(resultsFolderPath);
+        // Move transcription
+        await fs.promises.rename(
+            path.join(tempDir, 'Trascrizione.txt'),
+            path.join(resultsDir, 'Trascrizione.txt')
+        );
 
-        //move trascrizione.txt
-        await fs.promises.rename(path.join(tempFolderPath, 'Trascrizione.txt'), path.join(resultsFolderPath, 'Trascrizione.txt'));
-
-        // If backgroundSong is not null, copy the file
+        // Copy background song if selected
         if (backgroundSong) {
-            const sourceFilePath = path.join('./songs', backgroundSong);
-            const destFilePath = path.join(resultsFolderPath, backgroundSong);
-            await copyBackgroundSong(sourceFilePath, destFilePath);
+            await copyIfExists(
+                path.join(SONGS_DIR, backgroundSong),
+                path.join(resultsDir, backgroundSong)
+            );
         }
 
-        // Merge audio files in the temporary folder
-        const inputData = categorizeFiles(tempFolderPath, resultsFolderPath);
-        await mergeAudioFiles(inputData, resultsFolderPath, tempFolderPath);
+        const inputData = categorizeFiles(tempDir, resultsDir);
+        await mergeAudioFiles(inputData, resultsDir, tempDir);
 
-        // Check for the ZIP file
-        const zipFilePath = path.normalize(path.join(__dirname, 'results', `${folderName}.zip`));
-        if (!fs.existsSync(zipFilePath)) {
-            return res.status(404).json({ error: 'ZIP file not found' });
+        const zipPath = path.normalize(path.join(RESULTS_DIR, `${safeName}.zip`));
+        if (!fs.existsSync(zipPath)) {
+            return res.status(404).json({ error: 'ZIP file not found after processing' });
         }
 
-        // Send the ZIP file as a response
         res.setHeader('Content-Type', 'application/zip');
-        res.download(zipFilePath, `${folderName}.zip`, (err) => {
-            if (err) {
-                console.error('Error sending the file:', err);
-                return res.status(500).json({ error: 'Error sending the file' });
-            }
+        res.download(zipPath, `${safeName}.zip`, err => {
+            if (err) console.error('[/api/save] Download error:', err);
         });
     } catch (err) {
-        console.error(err);
-        return res.status(500).json({ error: err.message });
+        console.error('[/api/save] Error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
-
-// Funzione per svuotare la cartella di upload
-function clearUploadDir(uploadDir) {
-    if (fs.existsSync(uploadDir)) {
-        fs.readdirSync(uploadDir).forEach(file => {
-            const filePath = path.join(uploadDir, file);
-            if (fs.statSync(filePath).isFile()) {
-                fs.unlinkSync(filePath);
-            }
-        });
-    }
-}
-
-// Funzione per controllare se il file è un audio
-const isAudioFile = (file) => {
-    const audioMimeTypes = ['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp3', 'audio/mp4'];
-    return audioMimeTypes.includes(file.mimetype);
-};
-
-// Funzione per sanificare il nome del file
-const sanitizeFileName = (fileName) => {
-    return path.basename(fileName).replace(/[^a-zA-Z0-9.-]/g, '_'); // Sostituisce caratteri non sicuri
-};
-
-// Configura multer per il caricamento dei file
+// ─────────────────────────────────────────────
+// File Upload – Multer Configuration
+// ─────────────────────────────────────────────
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const uploadDir = 'upload/';
-        clearUploadDir(uploadDir);
-        // Crea la cartella se non esiste
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir);
-        }
+        const uploadDir = path.join(__dirname, 'upload');
+        clearDir(uploadDir);
+        fs.mkdirSync(uploadDir, { recursive: true });
         cb(null, uploadDir);
     },
-    filename: (req, file, cb) => {
-        const sanitizedFileName = sanitizeFileName(file.originalname);
-        cb(null, sanitizedFileName); // Usa il nome sanificato del file
-    }
+    filename: (req, file, cb) => cb(null, sanitizeFileName(file.originalname))
 });
 
-// Limite di dimensione del file
-const maxFileSize = 10 * 1024 * 1024; // 10 MB
-
 const upload = multer({
-    storage: storage,
-    limits: { fileSize: maxFileSize }, // Limita la dimensione del file
+    storage,
+    limits: { fileSize: MAX_FILE_SIZE },
     fileFilter: (req, file, cb) => {
         if (!isAudioFile(file)) {
-            return cb(new Error('Tipo di file non supportato. Carica un file audio standard (MP3, WAV, ecc.).'));
+            return cb(new Error('Tipo di file non supportato. Carica un file audio standard (MP3, WAV, ecc.)'));
         }
-        const allowedExtensions = ['.mp3', '.wav'];
-        const fileExtension = path.extname(file.originalname).toLowerCase();
-        if (!allowedExtensions.includes(fileExtension)) {
-            return cb(new Error('Estensione del file non supportata. Carica un file audio standard (MP3, WAV, ecc.).'));
+        if (!ALLOWED_AUDIO_EXT.has(path.extname(file.originalname).toLowerCase())) {
+            return cb(new Error('Estensione non supportata. Usa MP3 o WAV.'));
         }
         cb(null, true);
     }
 });
 
-// Rotta per il caricamento del file
-app.post('/upload', upload.single('audioFile'), (req, res) => {
-    // Verifica che un file sia stato caricato
-    if (!req.file) {
-        return res.status(400).send('Nessun file caricato.');
+// ─────────────────────────────────────────────
+// Route: POST /upload
+// ─────────────────────────────────────────────
+app.post('/upload', upload.single('audioFile'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Nessun file caricato' });
+
+    try {
+        const outputPath = await processMp3File(req.file.path);
+        res.json({ message: `${req.file.originalname} caricato e processato con successo!`, outputPath });
+    } catch (error) {
+        console.error('[/upload] Processing error:', error);
+        res.status(500).json({ error: 'Errore durante il processamento del file' });
     }
-
-    console.log(`File caricato: ${req.file.originalname}`);
-    console.log(`Percorso del file: ${req.file.path}`);
-
-    console.log('File verificato correttamente, iniziando il processamento...');
-
-    // Chiama la funzione processAudioFile
-    processMp3File(req.file.path)
-        .then(outputFilePath => {
-            console.log(`File processato e salvato come: ${outputFilePath}`);
-            res.json({ message: `File ${req.file.originalname} caricato e processato con successo!`, outputFilePath });
-        })
-        .catch(error => {
-            console.error('Errore durante il processamento del file:', error);
-            res.status(500).json('Errore durante il processamento del file.');
-        });
 }, (error, req, res, next) => {
-    // Gestione degli errori di multer
-    if (error instanceof multer.MulterError) {
-        return res.status(500).json(error.message);
-    } else {
-        return res.status(500).json('Errore sconosciuto durante il caricamento del file.');
+    if (error instanceof multer.MulterError || error) {
+        return res.status(400).json({ error: error.message });
     }
+    next();
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+// ─────────────────────────────────────────────
+// Startup
+// ─────────────────────────────────────────────
+cleanupTempFolders();
 
 app.listen(PORT, () => {
-    console.log(`Server in esecuzione su http://localhost:${process.env.PORT}`);
+    console.log(`[server] Running on http://localhost:${PORT} (${IS_PROD ? 'production' : 'development'})`);
 });

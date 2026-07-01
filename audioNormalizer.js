@@ -1,74 +1,114 @@
+'use strict';
+
 const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 
-const normalizedDirectory = 'songs/'; // Cartella per i file audio normalizzati
-const targetVolumeDB = 50; // Volume target in dB
+const NORMALIZED_DIR = 'songs/';
+const TARGET_VOLUME_DB = 50;
+const OUTPUT_BITRATE = '56k';
+const OUTPUT_FREQUENCY = 8000;
+const MAX_NAME_LENGTH = 50;
 
+/**
+ * Calculate the RMS volume in dB from raw PCM channel data.
+ * @param {Int16Array} channelData
+ * @returns {number} volume in dB
+ */
 function calculateVolumeInDB(channelData) {
-    const rms = Math.sqrt(channelData.reduce((sum, value) => sum + value * value, 0) / channelData.length);
-    const db = 20 * Math.log10(rms);
-    return db;
+    const sumSquares = channelData.reduce((sum, v) => sum + v * v, 0);
+    const rms = Math.sqrt(sumSquares / channelData.length);
+    return 20 * Math.log10(rms);
 }
 
+/**
+ * Calculate how many dB of gain to apply to reach the target volume.
+ * @param {number} currentVolumeDB
+ * @returns {number} gain in dB
+ */
 function calculateGain(currentVolumeDB) {
-    return targetVolumeDB - currentVolumeDB; // Calcola il guadagno necessario
+    return TARGET_VOLUME_DB - currentVolumeDB;
 }
 
-function processMp3File(filePath) {
-    console.log('Processing file before upload..')
-    return new Promise((resolve, reject) => {
-        const command = ffmpeg(filePath)
-            .audioCodec('pcm_s16le') // Imposta il codec audio su PCM per la lettura
-            .format('s16le') // Imposta il formato su PCM a 16 bit
-            .on('error', (err) => {
-                console.error(`Errore durante la conversione di ${filePath}:`, err);
-                reject(err);
-            });
+/**
+ * Generate a unique output path in the songs directory.
+ * Appends (1), (2), ... if the filename already exists.
+ * @param {string} baseName
+ * @returns {string} unique file path
+ */
+function getUniqueOutputPath(baseName) {
+    const truncated = baseName.length > MAX_NAME_LENGTH
+        ? baseName.substring(0, MAX_NAME_LENGTH)
+        : baseName;
 
-        // Crea un flusso di dati per il file WAV
+    let outputPath = path.join(NORMALIZED_DIR, `${truncated}.mp3`);
+    let counter = 1;
+
+    while (fs.existsSync(outputPath)) {
+        outputPath = path.join(NORMALIZED_DIR, `${truncated}(${counter}).mp3`);
+        counter++;
+    }
+
+    return outputPath;
+}
+
+/**
+ * Process an MP3/WAV file: normalize its volume and convert it to
+ * mono 8kHz 56kbps MP3 suitable for telephony IVR playback.
+ * The original upload file is deleted after successful processing.
+ *
+ * @param {string} filePath - Path to the uploaded audio file
+ * @returns {Promise<string>} Resolves with the path of the normalized output file
+ */
+function processMp3File(filePath) {
+    console.log(`[normalizer] Processing: ${filePath}`);
+
+    return new Promise((resolve, reject) => {
         const audioData = [];
-        command.pipe()
-            .on('data', (chunk) => {
-                audioData.push(chunk);
+
+        // Step 1: read raw PCM to compute current loudness
+        ffmpeg(filePath)
+            .audioCodec('pcm_s16le')
+            .format('s16le')
+            .on('error', err => {
+                console.error(`[normalizer] PCM read error for ${filePath}:`, err);
+                reject(err);
             })
+            .pipe()
+            .on('data', chunk => audioData.push(chunk))
             .on('end', () => {
                 const buffer = Buffer.concat(audioData);
-                const channelData = new Int16Array(buffer.buffer); // Crea un array di Int16 dal buffer
-                const currentVolumeDB = calculateVolumeInDB(channelData);
-                const gain = calculateGain(currentVolumeDB);
-                console.log(`Volume attuale per ${filePath}: ${currentVolumeDB.toFixed(2)} dB, Guadagno necessario: ${gain.toFixed(2)} dB`);
+                const channelData = new Int16Array(buffer.buffer);
+                const currentDB = calculateVolumeInDB(channelData);
+                const gain = calculateGain(currentDB);
 
-                // Applica il guadagno e salva il file audio modificato
-                // Crea il nome del file di output
-                let baseName = path.basename(filePath, path.extname(filePath));
-                baseName = baseName.length > 50 ? baseName.substring(0, 50) : baseName; // Limita a 50 caratteri
-                let outputFilePath = path.join(normalizedDirectory, `${baseName}.mp3`);
-                // Gestisci conflitti di nomi
-                let counter = 1;
-                while (fs.existsSync(outputFilePath)) {
-                    outputFilePath = path.join(normalizedDirectory, `${baseName}(${counter}).mp3`);
-                    counter++;
-                }
+                console.log(
+                    `[normalizer] ${path.basename(filePath)} — ` +
+                    `current: ${currentDB.toFixed(2)} dB, gain applied: ${gain.toFixed(2)} dB`
+                );
+
+                const baseName = path.basename(filePath, path.extname(filePath));
+                const outputPath = getUniqueOutputPath(baseName);
+
+                // Step 2: apply gain, convert to mono telephony-grade MP3
                 ffmpeg(filePath)
-                    .audioFilters(`volume=${gain}dB,pan=mono|c0=0.5*c0+0.5*c1`) // Applica il guadagno e converte in mono
-                    .audioCodec('libmp3lame') // Imposta il codec audio su libmp3lame per l'output MP3
-                    .audioBitrate('56k') // Imposta il bitrate a 56 kbps
-                    .audioFrequency(8000) // Imposta la frequenza a 8000 Hz
-                    .save(outputFilePath)
+                    .audioFilters(`volume=${gain}dB,pan=mono|c0=0.5*c0+0.5*c1`)
+                    .audioCodec('libmp3lame')
+                    .audioBitrate(OUTPUT_BITRATE)
+                    .audioFrequency(OUTPUT_FREQUENCY)
+                    .save(outputPath)
                     .on('end', () => {
-                        // Rimuovi il file originale
-                        fs.unlink(filePath, (err) => {
+                        fs.unlink(filePath, err => {
                             if (err) {
-                                console.error(`Errore durante la rimozione di ${filePath}:`, err);
-                                reject(err);
-                            } else {
-                                resolve(outputFilePath);
+                                console.error(`[normalizer] Could not delete temp file ${filePath}:`, err);
+                                return reject(err);
                             }
+                            console.log(`[normalizer] Done: ${outputPath}`);
+                            resolve(outputPath);
                         });
                     })
-                    .on('error', (err) => {
-                        console.error(`Errore durante il salvataggio di ${outputFilePath}:`, err);
+                    .on('error', err => {
+                        console.error(`[normalizer] Save error for ${outputPath}:`, err);
                         reject(err);
                     });
             });

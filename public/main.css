@@ -1,44 +1,140 @@
-.custom-btn-close {
-  background-color: red; /* Trasparente per il fondo */
-  opacity: 0.8;
-}
-
-.custom-btn-close:hover {
-  background-color: red; /* Colore di sfondo al passaggio del mouse */
-  opacity: 1;
-}
-
-#music {
-  width: 300px !important;
-  overflow: auto;
+/* ─────────────────────────────────────────────
+   Base & Typography
+───────────────────────────────────────────── */
+body {
+    background-color: #f8f9fa;
+    color: #212529;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
 }
 
 textarea {
-  resize: none;
+    resize: none;
 }
+
+/* ─────────────────────────────────────────────
+   App Header
+───────────────────────────────────────────── */
+.app-title {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #198754;
+    margin: 0;
+}
+
+.app-subtitle {
+    font-size: 1.2rem;
+    font-weight: 400;
+    color: #6c757d;
+}
+
+/* ─────────────────────────────────────────────
+   Music Select
+───────────────────────────────────────────── */
+#music {
+    min-width: 260px;
+    max-width: 360px;
+}
+
 #music > option {
-  font-size: large;
-  color: white !important;
+    font-size: 0.95rem;
 }
-.info-button {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  z-index: 1050; /* Assicurati che il bottone sia sopra altri elementi */
+
+/* ─────────────────────────────────────────────
+   Delete Row Button
+───────────────────────────────────────────── */
+.custom-btn-close {
+    background-color: #dc3545;
+    opacity: 0.75;
+    border-radius: 50%;
+    width: 1.4rem;
+    height: 1.4rem;
+    transition: opacity 0.15s ease;
 }
+
+.custom-btn-close:hover {
+    opacity: 1;
+}
+
+/* ─────────────────────────────────────────────
+   Name Shortcut Buttons
+───────────────────────────────────────────── */
+.name-shortcuts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.name-shortcuts .btn {
+    font-size: 0.75rem;
+    padding: 2px 7px;
+}
+
+/* ─────────────────────────────────────────────
+   Play / Pause Button
+───────────────────────────────────────────── */
+.play-btn {
+    width: 2.4rem;
+    height: 2.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    padding: 0;
+}
+
+/* ─────────────────────────────────────────────
+   Hidden Audio Player
+───────────────────────────────────────────── */
 #audioPlayer {
-  display: none;
+    display: none;
 }
 
-.rowLine hr {
-  width: 100%;
+/* ─────────────────────────────────────────────
+   Info (i) Floating Button
+───────────────────────────────────────────── */
+.info-button {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1050;
+    width: 2.6rem;
+    height: 2.6rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
+
+/* ─────────────────────────────────────────────
+   Success Toast
+───────────────────────────────────────────── */
 #successToast {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1100;
+    min-width: 260px;
 }
 
+/* ─────────────────────────────────────────────
+   Row Separator
+───────────────────────────────────────────── */
+.row hr {
+    width: 100%;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+    border-color: #dee2e6;
+}
 
-
+/* ─────────────────────────────────────────────
+   Loading overlay
+───────────────────────────────────────────── */
+.loading-overlay {
+    opacity: 0.5;
+    pointer-events: none;
+    user-select: none;
+    transition: opacity 0.2s ease;
+}
